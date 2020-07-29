@@ -1,0 +1,4 @@
+*.json
+.idea/
+.vscode/
+glove.840B.300d.txt
