@@ -89,14 +89,14 @@ def _process_article(article, config):
     if len(paragraphs) == 0:
         paragraphs = [['some random title', 'some random stuff']]
 
-    text_context, context_tokens, context_chars = '', [], []
+    text_context, context_tokens= '', []
     offsets = []
     flat_offsets = []
     start_end_facts = [] # (start_token_id, end_token_id, is_sup_fact=True/False)
     sent2title_ids = []
 
     def _process(sent, is_sup_fact, is_title=False):
-        nonlocal text_context, context_tokens, context_chars, offsets, start_end_facts, flat_offsets
+        nonlocal text_context, context_tokens, offsets, start_end_facts, flat_offsets
         N_chars = len(text_context)
 
         sent = sent
@@ -104,7 +104,6 @@ def _process_article(article, config):
         if is_title:
             sent = '<t> {} </t>'.format(sent)
             sent_tokens = ['<t>'] + sent_tokens + ['</t>']
-        sent_chars = [list(token) for token in sent_tokens]
         sent_spans = convert_idx(sent, sent_tokens)
 
         sent_spans = [[N_chars+e[0], N_chars+e[1]] for e in sent_spans]
@@ -112,7 +111,6 @@ def _process_article(article, config):
 
         text_context += sent
         context_tokens.extend(sent_tokens)
-        context_chars.extend(sent_chars)
         start_end_facts.append((N_tokens, N_tokens+my_N_tokens, is_sup_fact))
         offsets.append(sent_spans)
         flat_offsets.extend(sent_spans)
@@ -158,14 +156,13 @@ def _process_article(article, config):
         best_indices = (0, 1)
 
     ques_tokens = word_tokenize(prepro_sent(article['question']))
-    ques_chars = [list(token) for token in ques_tokens]
 
-    example = {'context_tokens': context_tokens,'context_chars': context_chars, 'ques_tokens': ques_tokens, 'ques_chars': ques_chars, 'y1s': [best_indices[0]], 'y2s': [best_indices[1]], 'id': article['_id'], 'start_end_facts': start_end_facts}
+    example = {'context_tokens': context_tokens, 'ques_tokens': ques_tokens, 'y1s': [best_indices[0]], 'y2s': [best_indices[1]], 'id': article['_id'], 'start_end_facts': start_end_facts}
     eval_example = {'context': text_context, 'spans': flat_offsets, 'answer': [answer], 'id': article['_id'],
             'sent2title_ids': sent2title_ids}
     return example, eval_example
 
-def process_file(filename, config, word_counter=None, char_counter=None):
+def process_file(filename, config, word_counter=None):
     data = json.load(open(filename, 'r'))
 
     examples = []
@@ -179,12 +176,10 @@ def process_file(filename, config, word_counter=None, char_counter=None):
             eval_examples[e['id']] = e
 
     # only count during training
-    if word_counter is not None and char_counter is not None:
+    if word_counter is not None:
         for example in examples:
             for token in example['ques_tokens'] + example['context_tokens']:
                 word_counter[token] += 1
-                for char in token:
-                    char_counter[char] += 1
 
     random.shuffle(examples)
     print("{} questions in total".format(len(examples)))
@@ -232,7 +227,7 @@ def get_embedding(counter, data_type, limit=-1, emb_file=None, size=None, vec_si
     return emb_mat, token2idx_dict, idx2token_dict
 
 
-def build_features(config, examples, data_type, out_file, word2idx_dict, char2idx_dict):
+def build_features(config, examples, data_type, out_file, word2idx_dict):
     if data_type == 'test':
         para_limit, ques_limit = 0, 0
         for example in tqdm(examples):
@@ -260,9 +255,7 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
         total += 1
 
         context_idxs = np.zeros(para_limit, dtype=np.int64)
-        context_char_idxs = np.zeros((para_limit, char_limit), dtype=np.int64)
         ques_idxs = np.zeros(ques_limit, dtype=np.int64)
-        ques_char_idxs = np.zeros((ques_limit, char_limit), dtype=np.int64)
 
         def _get_word(word):
             for each in (word, word.lower(), word.capitalize(), word.upper()):
@@ -270,29 +263,16 @@ def build_features(config, examples, data_type, out_file, word2idx_dict, char2id
                     return word2idx_dict[each]
             return 1
 
-        def _get_char(char):
-            if char in char2idx_dict:
-                return char2idx_dict[char]
-            return 1
 
         context_idxs[:len(example['context_tokens'])] = [_get_word(token) for token in example['context_tokens']]
         ques_idxs[:len(example['ques_tokens'])] = [_get_word(token) for token in example['ques_tokens']]
 
-        for i, token in enumerate(example["context_chars"]):
-            l = min(len(token), char_limit)
-            context_char_idxs[i, :l] = [_get_char(char) for char in token[:l]]
-
-        for i, token in enumerate(example["ques_chars"]):
-            l = min(len(token), char_limit)
-            ques_char_idxs[i, :l] = [_get_char(char) for char in token[:l]]
 
         start, end = example["y1s"][-1], example["y2s"][-1]
         y1, y2 = start, end
 
         datapoints.append({'context_idxs': torch.from_numpy(context_idxs),
-            'context_char_idxs': torch.from_numpy(context_char_idxs),
             'ques_idxs': torch.from_numpy(ques_idxs),
-            'ques_char_idxs': torch.from_numpy(ques_char_idxs),
             'y1': y1,
             'y2': y2,
             'id': example['id'],
@@ -311,8 +291,8 @@ def prepro(config):
     random.seed(13)
 
     if config.data_split == 'train':
-        word_counter, char_counter = Counter(), Counter()
-        examples, eval_examples = process_file(config.data_file, config, word_counter, char_counter)
+        word_counter = Counter()
+        examples, eval_examples = process_file(config.data_file, config, word_counter)
     else:
         examples, eval_examples = process_file(config.data_file, config)
 
@@ -324,14 +304,6 @@ def prepro(config):
         word_emb_mat, word2idx_dict, idx2word_dict = get_embedding(word_counter, "word", emb_file=config.glove_word_file,
                                                 size=config.glove_word_size, vec_size=config.glove_dim, token2idx_dict=word2idx_dict)
 
-    char2idx_dict = None
-    if os.path.isfile(config.char2idx_file):
-        with open(config.char2idx_file, "r") as fh:
-            char2idx_dict = json.load(fh)
-    else:
-        char_emb_mat, char2idx_dict, idx2char_dict = get_embedding(
-            char_counter, "char", emb_file=None, size=None, vec_size=config.char_dim, token2idx_dict=char2idx_dict)
-
     if config.data_split == 'train':
         record_file = config.train_record_file
         eval_file = config.train_eval_file
@@ -342,14 +314,11 @@ def prepro(config):
         record_file = config.test_record_file
         eval_file = config.test_eval_file
 
-    build_features(config, examples, config.data_split, record_file, word2idx_dict, char2idx_dict)
+    build_features(config, examples, config.data_split, record_file, word2idx_dict)
     save(eval_file, eval_examples, message='{} eval'.format(config.data_split))
 
     if not os.path.isfile(config.word2idx_file):
         save(config.word_emb_file, word_emb_mat, message="word embedding")
-        save(config.char_emb_file, char_emb_mat, message="char embedding")
         save(config.word2idx_file, word2idx_dict, message="word2idx")
-        save(config.char2idx_file, char2idx_dict, message="char2idx")
         save(config.idx2word_file, idx2word_dict, message='idx2word')
-        save(config.idx2char_file, idx2char_dict, message='idx2char')
 
