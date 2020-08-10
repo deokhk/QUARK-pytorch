@@ -83,6 +83,7 @@ def prepro_sent(sent):
     return sent
     # return sent.replace("''", '" ').replace("``", '" ')
 
+# process single entry of question-answer data point.
 def _process_article(article, config):
     paragraphs = article['context']
     # some articles in the fullwiki dev/test sets have zero paragraphs
