@@ -26,12 +26,15 @@ def process_article(qapair):
             if spfact[0] not in spfacts_titles:
                 spfacts_titles.append(spfact[0])
 
-        sentences=[]
+        preprocessed_paragraphs=[]
         numlist = list(range(len(paragraphs)))
 
         # process 2 paragraphs with supporting sentences
         for para in paragraphs:
             if para[0] in spfacts_titles:
+                _para = {}
+                _para['title']=para[0]
+                _para['sentences']=[]
                 supporting_sentence_idx = []
                 for spfact in spfacts:
                     if spfact[0] == para[0]:
@@ -43,7 +46,8 @@ def process_article(qapair):
                     else:
                         single_sentence['label'] = 0
                     single_sentence['sentence'] = para[1][sentence_idx]
-                    sentences.append(single_sentence)
+                    _para['sentences'].append(single_sentence)
+                preprocessed_paragraphs.append(_para)
                 numlist.remove(paragraphs.index(para))
         """
         If possible, randomly sample 2 paragraphs without supporting sentences.
@@ -55,13 +59,17 @@ def process_article(qapair):
 
         for para_idx in sampled_para_idx:
             para = paragraphs[para_idx]
+            _para = {}
+            _para['title']=para[0]
+            _para['sentences']=[]
             for sentence in para[1]:
                     single_sentence = {}
                     single_sentence['label'] = 0
                     single_sentence['sentence']=sentence
-                    sentences.append(single_sentence)
+                    _para['sentences'].append(single_sentence)
+            preprocessed_paragraphs.append(_para)
 
-        single_data['sentences']=sentences
+        single_data['paragraphs']=preprocessed_paragraphs
         return single_data
 
 def preprocess_file(filename):
@@ -69,12 +77,51 @@ def preprocess_file(filename):
 
     training_datas = []
 
-    total_data_nums = len(data)
-    data_count = 0
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(process_article)(article) for article in data)
     training_datas = [e for e in outputs]
     print("Saving preprocessed_{}".format(filename))
-    with open("preprocessed"+filename, "w") as fh:
+    with open("preprocessed_"+filename, "w") as fh:
         json.dump(training_datas, fh)
 
-preprocess_file("hotpot_train_v1.1.json")
+print('Preprocessing hotpot_train_v1.1.json')
+#preprocess_file("hotpot_train_v1.1.json")
+print('Loading preprocessed file...')
+data = json.load(open("preprocessed_hotpot_train_v1.1.json", 'r'))
+print('Loading BERT tokenizer...')
+tokenizer = BertTokenizer.from_pretrained('bert-large-cased-whole-word-masking')
+
+for qapair in data:
+    question = qapair['question']
+    answer = qapair['answer']
+    paragraphs = qapair['paragraphs']
+    for para in paragraphs:
+        indexed_tokens = []
+        segments_ids= []
+        line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
+        indexed_tokens += line_before_para_tokens
+        segment_before_para = [0 for _ in range(len(indexed_tokens))]
+        segments_ids+=segment_before_para
+
+        para_tokens = []
+        para_segment_ids = []
+        for sentence in para['sentences']:
+            sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
+            if sentence['label'] == 1:
+                # sentence is supporting facts
+                para_segment_ids+= [1 for _ in range(len(sentence_token))]
+            else:
+                para_segment_ids = [0 for _ in range(len(sentence_token))]
+            para_tokens += sentence_token
+
+        # If a paragraph has more than 512 tokens, we restrict the input to the first 512.
+        if len(para_tokens)>512:
+            para_tokens = para_tokens[0:512]
+            para_segment_ids = para_segment_ids[0:512]
+
+        indexed_tokens += para_tokens
+        segment_ids += para_segment_ids
+
+        line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
+        indexed_tokens += line_after_para_tokens
+        segment_ids += [0 for _ in range(len(line_after_para_tokens))]
+
