@@ -9,7 +9,7 @@ from joblib import Parallel, delayed
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
-    print("There are %d GPU(s) avaialbe." % torch.cuda.device_count())
+    print("There are %d GPU(s) available." % torch.cuda.device_count())
     print("We will use the GPU:", torch.cuda.get_device_name(0))
 else:
     print("No GPU available, using the CPU instead.")
@@ -73,55 +73,92 @@ def process_article(qapair):
         return single_data
 
 def preprocess_file(filename):
+    print('Preprocessing ', filename)
     data = json.load(open(filename, 'r'))
 
-    training_datas = []
+    preprocessed_datas = []
 
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(process_article)(article) for article in data)
-    training_datas = [e for e in outputs]
+    preprocessed_datas = [e for e in outputs]
     print("Saving preprocessed_{}".format(filename))
     with open("preprocessed_"+filename, "w") as fh:
-        json.dump(training_datas, fh)
+        json.dump(preprocessed_datas, fh)
 
-print('Preprocessing hotpot_train_v1.1.json')
-#preprocess_file("hotpot_train_v1.1.json")
-print('Loading preprocessed file...')
-data = json.load(open("preprocessed_hotpot_train_v1.1.json", 'r'))
-print('Loading BERT tokenizer...')
-tokenizer = BertTokenizer.from_pretrained('bert-large-cased-whole-word-masking')
-
-for qapair in data:
+def prepare_single_qapair(qapair, tokenizer):
+    MAX_LEN = 512
     question = qapair['question']
     answer = qapair['answer']
     paragraphs = qapair['paragraphs']
+    qapair_for_training = []
     for para in paragraphs:
+        para_for_training= []
         indexed_tokens = []
-        segments_ids= []
         line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
-        indexed_tokens += line_before_para_tokens
-        segment_before_para = [0 for _ in range(len(indexed_tokens))]
-        segments_ids+=segment_before_para
-
-        para_tokens = []
-        para_segment_ids = []
-        for sentence in para['sentences']:
-            sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
-            if sentence['label'] == 1:
-                # sentence is supporting facts
-                para_segment_ids+= [1 for _ in range(len(sentence_token))]
-            else:
-                para_segment_ids = [0 for _ in range(len(sentence_token))]
-            para_tokens += sentence_token
-
-        # If a paragraph has more than 512 tokens, we restrict the input to the first 512.
-        if len(para_tokens)>512:
-            para_tokens = para_tokens[0:512]
-            para_segment_ids = para_segment_ids[0:512]
-
-        indexed_tokens += para_tokens
-        segment_ids += para_segment_ids
+        segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
 
         line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
-        indexed_tokens += line_after_para_tokens
-        segment_ids += [0 for _ in range(len(line_after_para_tokens))]
+        segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
 
+        para_tokens = []
+
+        for sentence in para['sentences']:
+            sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
+            para_tokens += sentence_token
+
+        len_without_para_tokens = len(line_before_para_tokens) + len(line_after_para_tokens)
+        # If a input has more than 512 tokens, we restrict the input to 512.
+
+        allowed_para_length = len(para_tokens)
+        if len(para_tokens)+len_without_para_tokens>512:
+            para_tokens = para_tokens[0:512-len_without_para_tokens]
+            allowed_para_length = len(para_tokens)
+
+        indexed_tokens = line_before_para_tokens + para_tokens + line_after_para_tokens
+        attention_mask = [1 for _ in range(len(indexed_tokens))] + [0 for _ in range(MAX_LEN-len(indexed_tokens))]
+
+        # Pad the tokens to MAX_LEN
+        indexed_tokens += [0 for _ in range(MAX_LEN-len(indexed_tokens))]
+
+        para_for_training.append(indexed_tokens)
+        para_for_training.append(attention_mask)
+        para_for_training_sentence_list=[]
+        pos = 0
+
+        for sentence in para['sentences']:
+            sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
+            segment_para = [0 for _ in range(allowed_para_length)]
+            if pos+len(sentence_token) > allowed_para_length:
+                if pos < allowed_para_length:
+                    segment_para[pos:] = [1 for _ in range(allowed_para_length - pos)]
+            else:
+                segment_para[pos:pos+len(sentence_token)] = [1 for _ in range(len(sentence_token))]
+                pos = pos + len(sentence_token)
+            sentence_for_training = {}
+            sentence_for_training['label']=sentence['label']
+            sentence_segment_id = segment_before_para + segment_para + segment_after_para
+            
+            # Pad the tokens to MAX_LEN
+            sentence_segment_id += [0 for _ in range(MAX_LEN-len(sentence_segment_id))]
+            sentence_for_training['segment_id']= sentence_segment_id
+            para_for_training_sentence_list.append(sentence_for_training)
+            
+
+        para_for_training.append(para_for_training_sentence_list)
+        qapair_for_training.append(para_for_training)
+    return qapair_for_training
+            
+def prepare_training_datas(preprocessed_file):
+    print('Loading preprocessed file...')
+    data = json.load(open(preprocessed_file, 'r'))
+    print('Loading BERT tokenizer...')
+    tokenizer = BertTokenizer.from_pretrained('bert-large-cased-whole-word-masking')
+    training_datas =[]
+    outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_qapair)(qapair, tokenizer) for qapair in data)      
+    training_datas = [e for e in outputs]
+    print("Saving training_data")
+    with open("Training_data", "w") as fh:
+        json.dump(training_datas, fh)
+
+
+#preprocess_file("hotpot_train_v1.1.json")
+prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
