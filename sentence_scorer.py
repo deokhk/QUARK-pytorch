@@ -147,7 +147,7 @@ def prepare_training_datas(preprocessed_file):
     print('Loading preprocessed file...')
     data = json.load(open(preprocessed_file, 'r'))
     print('Loading BERT tokenizer...')
-    tokenizer = BertTokenizer.from_pretrained('bert-large-cased-whole-word-masking')
+    tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
     training_datas =[]
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_qapair)(qapair, tokenizer) for qapair in data)      
     training_datas = [e for e in outputs]
@@ -166,12 +166,12 @@ num_epochs= 4
 MAX_batch_token_size = 5625
 
 
-#preprocess_file("hotpot_train_v1.1.json")
-# prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
+# preprocess_file("hotpot_train_v1.1.json")
+prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
 print("Loading datasets..")
 train_dataset = json.load(open("Training_data.json", 'r'))
 model = BertForSequenceClassification.from_pretrained(
-    "bert-large-cased-whole-word-masking",
+    "bert-base-cased",
     num_labels = 2, 
     output_attentions = False, 
     output_hidden_states = False, 
