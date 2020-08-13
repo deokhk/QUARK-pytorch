@@ -167,7 +167,7 @@ MAX_batch_token_size = 5625
 
 
 # preprocess_file("hotpot_train_v1.1.json")
-prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
+# prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
 print("Loading datasets..")
 train_dataset = json.load(open("Training_data.json", 'r'))
 model = BertForSequenceClassification.from_pretrained(
@@ -235,14 +235,12 @@ for epoch in range(num_epochs):
         scheduler.step()
 
         step+=1
-        if step % 10 ==0 and step != 0:
+        if step % 100 ==0 and step != 0:
             elapsed_epoch_time = time.time()-training_start_time
             print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), len(train_dataset)))
 
-        if step == 100:
-            break
-
-
+# Save the fine-tuned model
+model.save_pretrained('./')
 
 
 
