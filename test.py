@@ -6,30 +6,22 @@ import ujson as json
 import random
 from joblib import Parallel, delayed
 
+def count_sentence_num_on_single_qa_pair(qapair):
+    num_sentence_in_para_cnt = []
+    for para in qapair:
+        num_sentence_in_para_cnt.append(len(para[2]))
+    return num_sentence_in_para_cnt
 
-data = json.load(open("hotpot_train_v1.1.json", 'r'))
-data_num = len(data)
-print("Total number of QA pair: ", len(data))
-para_num_count = []
 
-for a in range(10):
-    para_num_count.append(0)
-for i in range(data_num):
-    para_num = len(data[i]['context'])
-    para_num_count[para_num-1]+=1
-    if para_num == 2:
-        print("Detected qapair consists only of 2 pargraph")
-        print(data[i])
-        break
-    if i% 1000 == 0:
-        print("Done %d jobs, [ %d / %d]" % (i, i, data_num))
 
-print(para_num_count)
-count_sum  = 0
-for i in para_num_count:
-    count_sum+=i
+data = json.load(open("Training_data.json", 'r'))
+outputs = Parallel(n_jobs=12, verbose=10)(delayed(count_sentence_num_on_single_qa_pair)(qapair) for qapair in data)      
+num_sentence_in_paras = sum(outputs, [])
+num_sentence_in_paras.sort()
+max_sentence_num = num_sentence_in_paras[-1]
+min_sentence_num = num_sentence_in_paras[0]
 
-if count_sum == data_num:
-    print("OK all paragraphgs are within 10 paragraph")
-else:
-    print("SOMETHING WRONG..")
+for i in range(min_sentence_num, max_sentence_num+1):
+    print("Number of sentence :", i,"Number of paragraph with corresponding sentence number: ", num_sentence_in_paras.count(i))
+
+

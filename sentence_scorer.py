@@ -1,19 +1,15 @@
 import torch
 import numpy
 import torch.nn.functional as F
-from transformers import BertTokenizer, BertModel, BertForMaskedLM
 import ujson as json
 import random
+import time
+import torch.optim as optim
 from joblib import Parallel, delayed
+from torch.utils.data import DataLoader
+from transformers import BertTokenizer, BertModel, BertForSequenceClassification, get_linear_schedule_with_warmup
 
 
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-    print("There are %d GPU(s) available." % torch.cuda.device_count())
-    print("We will use the GPU:", torch.cuda.get_device_name(0))
-else:
-    print("No GPU available, using the CPU instead.")
-    device = torch.device("cpu")
 
 def process_article(qapair):
         single_data = {}
@@ -159,6 +155,94 @@ def prepare_training_datas(preprocessed_file):
     with open("Training_data", "w") as fh:
         json.dump(training_datas, fh)
 
+def batch(iterable, n=1):
+    l = len(iterable)
+    for ndx in range(0, l, n):
+        yield iterable[ndx:min(ndx + n, l)]
+
+
+batch_size = 3
+num_epochs= 4
+MAX_batch_token_size = 5625
+
 
 #preprocess_file("hotpot_train_v1.1.json")
-prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
+# prepare_training_datas("preprocessed_hotpot_train_v1.1.json")
+print("Loading datasets..")
+train_dataset = json.load(open("Training_data.json", 'r'))
+model = BertForSequenceClassification.from_pretrained(
+    "bert-large-cased-whole-word-masking",
+    num_labels = 2, 
+    output_attentions = False, 
+    output_hidden_states = False, 
+)
+
+model.cuda()
+
+optimizer = optim.Adam(model.parameters(), lr=1e-5)
+total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
+scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=total_training_steps//10, num_training_steps= total_training_steps)
+
+training_start_time = time.time()
+for epoch in range(num_epochs):
+    print("Shuffling dataset...")
+    random.shuffle(train_dataset)
+    print("")
+    print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
+    print('Training...')
+    total_train_loss = 0
+    model.train()
+    step = 0
+    total_train_loss = 0
+    for single_batch in batch(train_dataset, batch_size):
+
+        # cap the batch size at 5625 tokens
+        inputs_ids=[]
+        attention_masks=[]
+        segment_ids=[]
+        labels=[]
+        for question in single_batch:
+            for para in question:
+                for sentence in para[2]:
+                    inputs_ids.append(para[0])
+                    attention_masks.append(para[1])
+                    segment_ids.append(sentence['segment_id'])
+                    labels.append(sentence['label'])
+        current_batch_token_size = 0
+        for sentence_token in inputs_ids:
+            current_batch_token_size+=len(sentence_token)
+        
+        while current_batch_token_size > MAX_batch_token_size:
+            drop_sentence_idx = random.randint(0, len(inputs_ids)-1)
+
+            current_batch_token_size -=len(inputs_ids[drop_sentence_idx])
+            del inputs_ids[drop_sentence_idx]
+            del attention_masks[drop_sentence_idx]
+            del segment_ids[drop_sentence_idx]
+            del labels[drop_sentence_idx]
+
+        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
+        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
+        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+        b_labels = torch.Tensor(labels).cuda().long()
+
+        model.zero_grad()
+        loss, logits = model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
+        total_train_loss += loss.item()
+
+        loss.backward()
+        optimizer.step()
+        scheduler.step()
+
+        step+=1
+        if step % 10 ==0 and step != 0:
+            elapsed_epoch_time = time.time()-training_start_time
+            print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), len(train_dataset)))
+
+        if step == 100:
+            break
+
+
+
+
+
