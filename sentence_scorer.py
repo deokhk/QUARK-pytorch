@@ -76,7 +76,7 @@ def preprocess_file(filename):
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(process_article)(article) for article in data)
     preprocessed_datas = [e for e in outputs]
     print("Saving preprocessed_{}".format(filename))
-    with open("preprocessed_"+filename, "w") as fh:
+    with open("preprocessed_"+filename+".json", "w") as fh:
         json.dump(preprocessed_datas, fh)
 
 def prepare_single_qapair(qapair, tokenizer):
@@ -151,8 +151,8 @@ def prepare_datas(preprocessed_file, data_category):
     prepared_datas =[]
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_qapair)(qapair, tokenizer) for qapair in data)      
     prepared_datas = [e for e in outputs]
-    print("Saving {}_prepared_data".format(data_category))
-    with open(data_category+"prepared_data", "w") as fh:
+    print("Saving {}_data".format(data_category))
+    with open(data_category+"_data.json", "w") as fh:
         json.dump(prepared_datas, fh)
 
 def batch(iterable, n=1):
@@ -184,7 +184,7 @@ print("Loading training datasets..")
 train_dataset = json.load(open("Training_data.json", 'r'))
 
 print("Loading dev datasets..")
-dev_dataset = json.load(open(""))
+dev_dataset = json.load(open("Dev_data.json"))
 
 model = BertForSequenceClassification.from_pretrained(
     "bert-base-cased",
