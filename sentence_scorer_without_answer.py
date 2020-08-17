@@ -13,7 +13,7 @@ from transformers import BertTokenizer, BertModel, BertForSequenceClassification
 def process_article(qapair):
         single_data = {}
         single_data['question'] = qapair['question']
-        single_data['answer'] = qapair['answer']
+        single_data['answer'] = "[MASK]"
         paragraphs = qapair['context']
         spfacts = qapair['supporting_facts']
         spfacts_titles = []
@@ -75,8 +75,8 @@ def preprocess_file(filename):
 
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(process_article)(article) for article in data)
     preprocessed_datas = [e for e in outputs]
-    print("Saving preprocessed_{}".format(filename))
-    with open("preprocessed_"+filename, "w") as fh:
+    print("Saving preprocessed_wa_{}".format(filename))
+    with open("preprocessed_wa_"+filename, "w") as fh:
         json.dump(preprocessed_datas, fh)
 
 def prepare_single_qapair(qapair, tokenizer):
@@ -152,7 +152,7 @@ def prepare_datas(preprocessed_file, data_category):
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_qapair)(qapair, tokenizer) for qapair in data)      
     prepared_datas = [e for e in outputs]
     print("Saving {}_data".format(data_category))
-    with open(data_category+"_data.json", "w") as fh:
+    with open(data_category+"_data_wa.json", "w") as fh:
         json.dump(prepared_datas, fh)
 
 def batch(iterable, n=1):
@@ -171,22 +171,22 @@ num_epochs= 4
 MAX_batch_token_size = 5625
 
 print("Preprocess training data")
-# preprocess_file("hotpot_train_v1.1.json")
+preprocess_file("hotpot_train_v1.1.json")
 print("Prepare training data")
-# prepare_datas("preprocessed_hotpot_train_v1.1.json", "Training")
+prepare_datas("preprocessed_wa_hotpot_train_v1.1.json", "Training")
 
 print("Preprocess dev data")
 preprocess_file("hotpot_dev_distractor_v1.json")
 print("Prepare dev data")
-prepare_datas("preprocessed_hotpot_dev_distractor_v1.json", "Dev")
+prepare_datas("preprocessed_wa_hotpot_dev_distractor_v1.json", "Dev")
 
 print("Loading training datasets..")
-train_dataset = json.load(open("Training_data.json", 'r'))
+train_dataset = json.load(open("Training_data_wa.json", 'r'))
 
 print("Loading dev datasets..")
-dev_dataset = json.load(open("Dev_data.json"))
+dev_dataset = json.load(open("Dev_data_wa.json"))
 
-sentence_scorer_model = BertForSequenceClassification.from_pretrained(
+sentence_scorer_wa_model = BertForSequenceClassification.from_pretrained(
     "bert-base-cased",
     num_labels = 2, 
     output_attentions = False, 
@@ -194,9 +194,9 @@ sentence_scorer_model = BertForSequenceClassification.from_pretrained(
 )
 
 
-sentence_scorer_model.cuda()
+sentence_scorer_wa_model.cuda()
 
-optimizer = optim.Adam(sentence_scorer_model.parameters(), lr=1e-5)
+optimizer = optim.Adam(sentence_scorer_wa_model.parameters(), lr=1e-5)
 total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
 scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=total_training_steps//10, num_training_steps= total_training_steps)
 
@@ -214,7 +214,7 @@ for epoch in range(num_epochs):
     print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
     print('Training...')
     total_train_loss = 0
-    sentence_scorer_model.train()
+    sentence_scorer_wa_model.train()
     step = 0
     for single_batch in batch(train_dataset, batch_size):
 
@@ -248,8 +248,8 @@ for epoch in range(num_epochs):
         b_attention_masks = torch.Tensor(attention_masks).cuda().long()
         b_labels = torch.Tensor(labels).cuda().long()
 
-        sentence_scorer_model.zero_grad()
-        loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
+        sentence_scorer_wa_model.zero_grad()
+        loss, logits = sentence_scorer_wa_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
         total_train_loss += loss.item()
 
         loss.backward()
@@ -270,7 +270,7 @@ for epoch in range(num_epochs):
     # ==============
 
     print("Now validating...")
-    sentence_scorer_model.eval()
+    sentence_scorer_wa_model.eval()
     validation_epoch_start_time = time.time()
 
     total_eval_accuracy = 0
@@ -309,7 +309,7 @@ for epoch in range(num_epochs):
         b_labels = torch.Tensor(labels).cuda().long()
 
         with torch.no_grad():
-            loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
+            loss, logits = sentence_scorer_wa_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
         
         total_eval_loss += loss.item()
 
@@ -345,7 +345,7 @@ with open("Training_stats.json", "w") as fh:
 
 # Save the fine-tuned model
 print("Saving the fine-tuned model..")
-sentence_scorer_model.save_pretrained('./')
+sentence_scorer_wa_model.save_pretrained('./')
 print("Training complete!")
 
 
