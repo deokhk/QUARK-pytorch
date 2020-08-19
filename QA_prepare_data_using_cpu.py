@@ -6,6 +6,7 @@ import torch.optim as optim
 import numpy as np
 import time
 import datetime
+from joblib import Parallel, delayed
 from transformers import BertTokenizer, BertModel, BertConfig, BertForSequenceClassification, BertForQuestionAnswering, get_linear_schedule_with_warmup, AdamW, AutoModel
 
 def format_time(elapsed):
@@ -51,9 +52,9 @@ def preprocess_single_qapair(single_hotpot_qapair):
             attention_masks.append(attention_mask)
             segment_ids.append(token_type_id)
 
-        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+        b_inputs_ids = torch.Tensor(inputs_ids).long()
+        b_segment_ids = torch.Tensor(segment_ids).long()
+        b_attention_masks = torch.Tensor(attention_masks).long()
         with torch.no_grad():
             logits =rnas_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks)
             logits_list = list(logits[0])
@@ -63,6 +64,52 @@ def preprocess_single_qapair(single_hotpot_qapair):
     score_sorted_sentences = sorted(sentences, key=(lambda x : x['score']), reverse=True)
     return score_sorted_sentences
 
+def prepare_single_data_for_rnas(qapair):
+    single_qa_line={}
+    sorted_sentences = preprocess_single_qapair(qapair)
+    line_before_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + qapair['question'] + " [SEP] "))
+    line_after_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" yes no noans [SEP]"))
+    line_len_without_E = len(line_before_E_tokens) + len(line_after_E_tokens)
+    E_tokens=[]        
+    for single_sentence_info in sorted_sentences:
+        E_tokens = E_tokens + single_sentence_info['token']
+        if len(E_tokens) + line_len_without_E > 512:
+            E_tokens = E_tokens[:512-line_len_without_E]
+            break
+    qa_line = line_before_E_tokens + E_tokens + line_after_E_tokens
+
+    tokenized_answer = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(qapair['answer']))
+    answer_len = len(tokenized_answer)
+    start_position = 0
+    end_position = 0
+
+    for idx in range(len(line_before_E_tokens), len(qa_line)-answer_len+1):
+        candidate_span = qa_line[idx:idx+answer_len]
+        if candidate_span == tokenized_answer:
+            start_position = idx
+            end_position = idx + answer_len - 1
+            break
+    
+    # If we cannot find answer within the context, mark the answer as no answer.
+    if start_position == 0 and end_position == 0:
+        # index of noans token => [len(qa_line)-3 : len(qa_line)-2]
+        start_position = len(qa_line)-3
+        end_position = start_position+1
+
+    segment_id = [0 for _ in range(len(line_before_E_tokens))] + [1 for _ in range(len(E_tokens + line_after_E_tokens))]
+    attention_mask = [1 for _ in range(len(qa_line))]
+
+    # pad the tokens 
+    qa_line = qa_line + [0 for _ in range(512-len(qa_line))]
+    segment_id = segment_id + [0 for _ in range(512-len(segment_id))]
+    attention_mask = attention_mask + [0 for _ in range(512-len(attention_mask))]
+
+    single_qa_line['line'] = qa_line
+    single_qa_line['segment_id'] = segment_id
+    single_qa_line['attention_mask'] = attention_mask
+    single_qa_line['start_position'] = start_position
+    single_qa_line['end_position'] = end_position
+    return single_qa_line
 
 def prepare_file_for_rnas(original_hotpotqa_file, data_category):
     print("Loading {} ...".format(original_hotpotqa_file))
@@ -71,57 +118,9 @@ def prepare_file_for_rnas(original_hotpotqa_file, data_category):
     Num_total_datas = len(data)
     start_time = time.time()
     prepared_datas = []
-    for myidx, qapair in enumerate(data):
-        single_qa_line={}
-        sorted_sentences = preprocess_single_qapair(qapair)
-        line_before_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + qapair['question'] + " [SEP] "))
-        line_after_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" yes no noans [SEP]"))
-        line_len_without_E = len(line_before_E_tokens) + len(line_after_E_tokens)
-        E_tokens=[]        
-        for single_sentence_info in sorted_sentences:
-            E_tokens = E_tokens + single_sentence_info['token']
-            if len(E_tokens) + line_len_without_E > 512:
-                E_tokens = E_tokens[:512-line_len_without_E]
-                break
-        qa_line = line_before_E_tokens + E_tokens + line_after_E_tokens
+    outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_data_for_rnas)(qapair) for qapair in data)
+    prepared_datas = [e for e in outputs]
 
-        tokenized_answer = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(qapair['answer']))
-        answer_len = len(tokenized_answer)
-        start_position = 0
-        end_position = 0
-
-        for idx in range(len(line_before_E_tokens), len(qa_line)-answer_len+1):
-            candidate_span = qa_line[idx:idx+answer_len]
-            if candidate_span == tokenized_answer:
-                start_position = idx
-                end_position = idx + answer_len - 1
-                break
-        
-        # If we cannot find answer within the context, mark the answer as no answer.
-        if start_position == 0 and end_position == 0:
-            # index of noans token => [len(qa_line)-3 : len(qa_line)-2]
-            start_position = len(qa_line)-3
-            end_position = start_position+1
-
-        segment_id = [0 for _ in range(len(line_before_E_tokens))] + [1 for _ in range(len(E_tokens + line_after_E_tokens))]
-        attention_mask = [1 for _ in range(len(qa_line))]
-
-        # pad the tokens 
-        qa_line = qa_line + [0 for _ in range(512-len(qa_line))]
-        segment_id = segment_id + [0 for _ in range(512-len(segment_id))]
-        attention_mask = attention_mask + [0 for _ in range(512-len(attention_mask))]
-
-        single_qa_line['line'] = qa_line
-        single_qa_line['segment_id'] = segment_id
-        single_qa_line['attention_mask'] = attention_mask
-        single_qa_line['start_position'] = start_position
-        single_qa_line['end_position'] = end_position
-        prepared_datas.append(single_qa_line)
-
-        if myidx%50 == 0:
-            time_taken = time.time()-start_time
-            print("Done [{}/{}], elapsed = {}".format(myidx, Num_total_datas, format_time(time_taken)))
-    print("Saving {}_data_for_rnas".format(data_category))
     with open(data_category+"_data_for_rnas.json", "w") as fh:
         json.dump(prepared_datas, fh)
 
@@ -132,7 +131,6 @@ batch_size = 16
 num_epoch = 3
 print("Loading model..")
 rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
-rnas_model.cuda()
 rnas_model.eval()
 
 print("Preparing training data..")
