@@ -339,7 +339,7 @@ for epoch in range(num_epochs):
     )
 
 #Save the training stats
-print("Saving training stats")
+print("Saving training stats...")
 with open("Training_stats.json", "w") as fh:
     json.dump(training_stats, fh)
 
