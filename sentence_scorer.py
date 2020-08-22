@@ -9,6 +9,7 @@ import numpy as np
 from joblib import Parallel, delayed
 from torch.utils.data import DataLoader
 from transformers import BertTokenizer, BertModel, BertForSequenceClassification, get_linear_schedule_with_warmup
+from util import batch, flat_accuracy
 
 def process_article(qapair):
         single_data = {}
@@ -155,198 +156,190 @@ def prepare_datas(preprocessed_file, data_category):
     with open(data_category+"_data.json", "w") as fh:
         json.dump(prepared_datas, fh)
 
-def batch(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx:min(ndx + n, l)]
-
-def flat_accuracy(preds, labels):
-    pred_flat = np.argmax(preds, axis=1).flatten()
-    labels_flat = labels.flatten()
-    return np.sum(pred_flat == labels_flat) / len(labels_flat)
 
 
-batch_size = 3
-num_epochs= 4
-MAX_batch_token_size = 5625
+def train_and_evaluate_ras_model():
+    batch_size = 3
+    num_epochs= 4
+    MAX_batch_token_size = 5625
 
-print("Preprocess training data")
-# preprocess_file("hotpot_train_v1.1.json")
-print("Prepare training data")
-# prepare_datas("preprocessed_hotpot_train_v1.1.json", "Training")
+    print("Preprocess training data")
+    # preprocess_file("hotpot_train_v1.1.json")
+    print("Prepare training data")
+    # prepare_datas("preprocessed_hotpot_train_v1.1.json", "Training")
 
-print("Preprocess dev data")
-preprocess_file("hotpot_dev_distractor_v1.json")
-print("Prepare dev data")
-prepare_datas("preprocessed_hotpot_dev_distractor_v1.json", "Dev")
+    print("Preprocess dev data")
+    preprocess_file("hotpot_dev_distractor_v1.json")
+    print("Prepare dev data")
+    prepare_datas("preprocessed_hotpot_dev_distractor_v1.json", "Dev")
 
-print("Loading training datasets..")
-train_dataset = json.load(open("Training_data.json", 'r'))
+    print("Loading training datasets..")
+    train_dataset = json.load(open("Training_data.json", 'r'))
 
-print("Loading dev datasets..")
-dev_dataset = json.load(open("Dev_data.json"))
+    print("Loading dev datasets..")
+    dev_dataset = json.load(open("Dev_data.json"))
 
-sentence_scorer_model = BertForSequenceClassification.from_pretrained(
-    "bert-base-cased",
-    num_labels = 2, 
-    output_attentions = False, 
-    output_hidden_states = False, 
-)
-
-
-sentence_scorer_model.cuda()
-
-optimizer = optim.Adam(sentence_scorer_model.parameters(), lr=1e-5)
-total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
-scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=total_training_steps//10, num_training_steps= total_training_steps)
-
-# ============
-#   Training
-# ============
-
-training_stats = []
-
-for epoch in range(num_epochs):
-    training_epoch_start_time = time.time()
-    print("Shuffling dataset...")
-    random.shuffle(train_dataset)
-    print("")
-    print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
-    print('Training...')
-    total_train_loss = 0
-    sentence_scorer_model.train()
-    step = 0
-    for single_batch in batch(train_dataset, batch_size):
-
-        # cap the batch size at 5625 tokens
-        inputs_ids=[]
-        attention_masks=[]
-        segment_ids=[]
-        labels=[]
-        for question in single_batch:
-            for para in question:
-                for sentence in para[2]:
-                    inputs_ids.append(para[0])
-                    attention_masks.append(para[1])
-                    segment_ids.append(sentence['segment_id'])
-                    labels.append(sentence['label'])
-        current_batch_token_size = 0
-        for sentence_token in inputs_ids:
-            current_batch_token_size+=len(sentence_token)
-        
-        while current_batch_token_size > MAX_batch_token_size:
-            drop_sentence_idx = random.randint(0, len(inputs_ids)-1)
-
-            current_batch_token_size -=len(inputs_ids[drop_sentence_idx])
-            del inputs_ids[drop_sentence_idx]
-            del attention_masks[drop_sentence_idx]
-            del segment_ids[drop_sentence_idx]
-            del labels[drop_sentence_idx]
-
-        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
-        b_labels = torch.Tensor(labels).cuda().long()
-
-        sentence_scorer_model.zero_grad()
-        loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
-        total_train_loss += loss.item()
-
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-
-        step+=1
-        if step % 100 ==0 and step != 0:
-            elapsed_epoch_time = time.time()-training_epoch_start_time
-            print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), elapsed_epoch_time))
-    avg_train_loss = total_train_loss / step
-    Training_time = time.time()-training_epoch_start_time
-    print("Epoch {} average training loss : {}".format(epoch, avg_train_loss))
-    print("Epoch {} took : ".format(Training_time))
-
-    # ==============
-    #   Validation
-    # ==============
-
-    print("Now validating...")
-    sentence_scorer_model.eval()
-    validation_epoch_start_time = time.time()
-
-    total_eval_accuracy = 0
-    total_eval_loss = 0
-    step = 0
-    for single_batch in batch(dev_dataset, batch_size):
-
-        # cap the batch size at 5625 tokens
-        inputs_ids=[]
-        attention_masks=[]
-        segment_ids=[]
-        labels=[]
-        for question in single_batch:
-            for para in question:
-                for sentence in para[2]:
-                    inputs_ids.append(para[0])
-                    attention_masks.append(para[1])
-                    segment_ids.append(sentence['segment_id'])
-                    labels.append(sentence['label'])
-        current_batch_token_size = 0
-        for sentence_token in inputs_ids:
-            current_batch_token_size+=len(sentence_token)
-        
-        while current_batch_token_size > MAX_batch_token_size:
-            drop_sentence_idx = random.randint(0, len(inputs_ids)-1)
-
-            current_batch_token_size -=len(inputs_ids[drop_sentence_idx])
-            del inputs_ids[drop_sentence_idx]
-            del attention_masks[drop_sentence_idx]
-            del segment_ids[drop_sentence_idx]
-            del labels[drop_sentence_idx]
-
-        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
-        b_labels = torch.Tensor(labels).cuda().long()
-
-        with torch.no_grad():
-            loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
-        
-        total_eval_loss += loss.item()
-
-        logits = logits.detach().cpu().numpy()
-        label_ids = b_labels.to('cpu').numpy()
-
-        total_eval_accuracy += flat_accuracy(logits, label_ids)
-
-        step+=1
-
-    avg_eval_loss = total_eval_loss / step
-    avg_eval_accuracy = total_eval_accuracy / step
-    Validation_time = time.time()-validation_epoch_start_time
-
-    print("Epoch {} average validation loss : {}".format(epoch, avg_eval_loss))
-    print("Epoch {} average validation accuracy : {}".format(epoch, avg_eval_accuracy))
-    
-    training_stats.append(
-        {
-            'epoch': epoch+1,
-            'Training_Loss': avg_train_loss,
-            'Valid_Loss': avg_eval_loss,
-            'Valid_Accuracy': avg_eval_accuracy,
-            'Training_Time': Training_time,
-            'Validation_Time': Validation_time
-        }
+    sentence_scorer_model = BertForSequenceClassification.from_pretrained(
+        "bert-base-cased",
+        num_labels = 2, 
+        output_attentions = False, 
+        output_hidden_states = False, 
     )
 
-#Save the training stats
-print("Saving training stats...")
-with open("Training_stats.json", "w") as fh:
-    json.dump(training_stats, fh)
 
-# Save the fine-tuned model
-print("Saving the fine-tuned model..")
-sentence_scorer_model.save_pretrained('./')
-print("Training complete!")
+    sentence_scorer_model.cuda()
+
+    optimizer = optim.Adam(sentence_scorer_model.parameters(), lr=1e-5)
+    total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=total_training_steps//10, num_training_steps= total_training_steps)
+
+    # ============
+    #   Training
+    # ============
+
+    training_stats = []
+
+    for epoch in range(num_epochs):
+        training_epoch_start_time = time.time()
+        print("Shuffling dataset...")
+        random.shuffle(train_dataset)
+        print("")
+        print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
+        print('Training...')
+        total_train_loss = 0
+        sentence_scorer_model.train()
+        step = 0
+        for single_batch in batch(train_dataset, batch_size):
+
+            # cap the batch size at 5625 tokens
+            inputs_ids=[]
+            attention_masks=[]
+            segment_ids=[]
+            labels=[]
+            for question in single_batch:
+                for para in question:
+                    for sentence in para[2]:
+                        inputs_ids.append(para[0])
+                        attention_masks.append(para[1])
+                        segment_ids.append(sentence['segment_id'])
+                        labels.append(sentence['label'])
+            current_batch_token_size = 0
+            for sentence_token in inputs_ids:
+                current_batch_token_size+=len(sentence_token)
+            
+            while current_batch_token_size > MAX_batch_token_size:
+                drop_sentence_idx = random.randint(0, len(inputs_ids)-1)
+
+                current_batch_token_size -=len(inputs_ids[drop_sentence_idx])
+                del inputs_ids[drop_sentence_idx]
+                del attention_masks[drop_sentence_idx]
+                del segment_ids[drop_sentence_idx]
+                del labels[drop_sentence_idx]
+
+            b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
+            b_segment_ids = torch.Tensor(segment_ids).cuda().long()
+            b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+            b_labels = torch.Tensor(labels).cuda().long()
+
+            sentence_scorer_model.zero_grad()
+            loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
+            total_train_loss += loss.item()
+
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+
+            step+=1
+            if step % 100 ==0 and step != 0:
+                elapsed_epoch_time = time.time()-training_epoch_start_time
+                print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), elapsed_epoch_time))
+        avg_train_loss = total_train_loss / step
+        Training_time = time.time()-training_epoch_start_time
+        print("Epoch {} average training loss : {}".format(epoch, avg_train_loss))
+        print("Epoch {} took : ".format(Training_time))
+
+        # ==============
+        #   Validation
+        # ==============
+
+        print("Now validating...")
+        sentence_scorer_model.eval()
+        validation_epoch_start_time = time.time()
+
+        total_eval_accuracy = 0
+        total_eval_loss = 0
+        step = 0
+        for single_batch in batch(dev_dataset, batch_size):
+
+            # cap the batch size at 5625 tokens
+            inputs_ids=[]
+            attention_masks=[]
+            segment_ids=[]
+            labels=[]
+            for question in single_batch:
+                for para in question:
+                    for sentence in para[2]:
+                        inputs_ids.append(para[0])
+                        attention_masks.append(para[1])
+                        segment_ids.append(sentence['segment_id'])
+                        labels.append(sentence['label'])
+            current_batch_token_size = 0
+            for sentence_token in inputs_ids:
+                current_batch_token_size+=len(sentence_token)
+            
+            while current_batch_token_size > MAX_batch_token_size:
+                drop_sentence_idx = random.randint(0, len(inputs_ids)-1)
+
+                current_batch_token_size -=len(inputs_ids[drop_sentence_idx])
+                del inputs_ids[drop_sentence_idx]
+                del attention_masks[drop_sentence_idx]
+                del segment_ids[drop_sentence_idx]
+                del labels[drop_sentence_idx]
+
+            b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
+            b_segment_ids = torch.Tensor(segment_ids).cuda().long()
+            b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+            b_labels = torch.Tensor(labels).cuda().long()
+
+            with torch.no_grad():
+                loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
+            
+            total_eval_loss += loss.item()
+
+            logits = logits.detach().cpu().numpy()
+            label_ids = b_labels.to('cpu').numpy()
+
+            total_eval_accuracy += flat_accuracy(logits, label_ids)
+
+            step+=1
+
+        avg_eval_loss = total_eval_loss / step
+        avg_eval_accuracy = total_eval_accuracy / step
+        Validation_time = time.time()-validation_epoch_start_time
+
+        print("Epoch {} average validation loss : {}".format(epoch, avg_eval_loss))
+        print("Epoch {} average validation accuracy : {}".format(epoch, avg_eval_accuracy))
+        
+        training_stats.append(
+            {
+                'epoch': epoch+1,
+                'Training_Loss': avg_train_loss,
+                'Valid_Loss': avg_eval_loss,
+                'Valid_Accuracy': avg_eval_accuracy,
+                'Training_Time': Training_time,
+                'Validation_Time': Validation_time
+            }
+        )
+
+    #Save the training stats
+    print("Saving training stats...")
+    with open("Training_stats.json", "w") as fh:
+        json.dump(training_stats, fh)
+
+    # Save the fine-tuned model
+    print("Saving the fine-tuned model..")
+    sentence_scorer_model.save_pretrained('./')
+    print("Training complete!")
 
 
 

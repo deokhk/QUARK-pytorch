@@ -9,17 +9,9 @@ import datetime
 import random
 from transformers import BertTokenizer, BertModel, BertConfig, BertForSequenceClassification, BertForQuestionAnswering, get_linear_schedule_with_warmup
 from collections import Counter
+from util import batch, format_time, f1_score, exact_match_score
 
-def format_time(elapsed):
-    elapsed_rounded = int(round((elapsed)))
-    return str(datetime.timedelta(seconds=elapsed_rounded))
-
-def batch(iterable, n=1):
-    l = len(iterable)
-    for ndx in range(0, l, n):
-        yield iterable[ndx:min(ndx + n, l)]
-
-def preprocess_single_qapair(single_hotpot_qapair):
+def preprocess_single_qapair(single_hotpot_qapair, rnas_model, tokenizer):
     question = single_hotpot_qapair['question']
     answer = single_hotpot_qapair['answer']
     paragraphs = single_hotpot_qapair['context']
@@ -69,7 +61,7 @@ def preprocess_single_qapair(single_hotpot_qapair):
     return score_sorted_sentences
 
 
-def prepare_file_for_rnas(original_hotpotqa_file, data_category):
+def prepare_file_for_rnas(original_hotpotqa_file, data_category, rnas_model, tokenizer):
     print("Loading {} ...".format(original_hotpotqa_file))
     data = json.load(open(original_hotpotqa_file, 'r'))
     print("Successfully loaded the data!")
@@ -78,7 +70,7 @@ def prepare_file_for_rnas(original_hotpotqa_file, data_category):
     prepared_datas = []
     for myidx, qapair in enumerate(data):
         single_qa_line={}
-        sorted_sentences = preprocess_single_qapair(qapair)
+        sorted_sentences = preprocess_single_qapair(qapair, rnas_model, tokenizer)
         line_before_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + qapair['question'] + " [SEP] "))
         line_after_E_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" yes no noans [SEP]"))
         line_len_without_E = len(line_before_E_tokens) + len(line_after_E_tokens)
@@ -130,204 +122,186 @@ def prepare_file_for_rnas(original_hotpotqa_file, data_category):
     with open(data_category+"_data_for_rnas.json", "w") as fh:
         json.dump(prepared_datas, fh)
 
-def f1_score(prediction, ground_truth, special_tokens):
-    if prediction in special_tokens and prediction != ground_truth:
-        return 0
-    if ground_truth in special_tokens and prediction != ground_truth:
-        return 0
+def train_and_evaluate_QA_module():
+    print("Loading tokenizer..")
+    tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
-    common = Counter(prediction) & Counter(ground_truth)
-    num_same = sum(common.values())
-    if num_same == 0:
-        return 0
-    
-    precision = 1.0 * num_same / len(prediction)
-    recall = 1.0 * num_same / len(ground_truth)
-    f1 = (2 * precision * recall) / (precision + recall)
-    return f1
+    print("Loading model..")
+    rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
+    rnas_model.cuda()
+    rnas_model.eval()
 
-def exact_match_score(prediction, ground_truth):
-    return (prediction == ground_truth)
+    print("Preparing training data..")
+    prepare_file_for_rnas("hotpot_train_v1.1.json", "Training", rnas_model, tokenizer)
+    print("Preparing dev data..")
+    prepare_file_for_rnas("hotpot_dev_distractor_v1.json", "Dev", rnas_model, tokenizer)
 
-print("Loading tokenizer..")
-tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
+    rnas_model.cpu()
 
-print("Loading model..")
-# rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
-# rnas_model.cuda()
-# rnas_model.eval()
+    print("Loading training datasets..")
+    train_dataset = json.load(open("Training_data_for_rnas.json", 'r'))
 
-# print("Preparing training data..")
-# prepare_file_for_rnas("hotpot_train_v1.1.json", "Training")
-# print("Preparing dev data..")
-# prepare_file_for_rnas("hotpot_dev_distractor_v1.json", "Dev")
+    print("Loading dev datasets..")
+    dev_dataset = json.load(open("Dev_data_for_rnas.json"))
 
-# rnas_model.cpu()
+    QA_model = BertForQuestionAnswering.from_pretrained('bert-base-cased')
+    QA_model.cuda()
 
-print("Loading training datasets..")
-train_dataset = json.load(open("Training_data_for_rnas.json", 'r'))
+    batch_size = 16
+    num_epochs = 3
+    optimizer = optim.Adam(QA_model.parameters(), lr=1e-5, weight_decay=0.01)
+    total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
+    scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= total_training_steps//10, num_training_steps=total_training_steps)
 
-print("Loading dev datasets..")
-dev_dataset = json.load(open("Dev_data_for_rnas.json"))
+    # ============
+    #   Training
+    # ============
 
-QA_model = BertForQuestionAnswering.from_pretrained('bert-base-cased')
-QA_model.cuda()
+    print("Now training...")
+    training_stats = []
 
-batch_size = 16
-num_epochs = 3
-optimizer = optim.Adam(QA_model.parameters(), lr=1e-5, weight_decay=0.01)
-total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
-scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps= total_training_steps//10, num_training_steps=total_training_steps)
-
-# ============
-#   Training
-# ============
-
-print("Now training...")
-training_stats = []
-
-for epoch in range(num_epochs):
-    training_epoch_start_time = time.time()
-    print("Shuffling dataset...")
-    random.shuffle(train_dataset)
-    print("")
-    print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
-    print('Training...')
-    total_traing_loss = 0
-    QA_model.train()
-    step = 0
-    for single_batch in batch(train_dataset, batch_size):
-        inputs_ids =[]
-        attention_masks =[]
-        segment_ids =[]
-        start_positions =[]
-        end_positions = []
-        for single_qa_line in single_batch:
-            inputs_ids.append(single_qa_line['line']) 
-            segment_ids.append(single_qa_line['segment_id']) 
-            attention_masks.append(single_qa_line['attention_mask'])
-            start_positions.append(single_qa_line['start_position'])
-            end_positions.append(single_qa_line['end_position'])
-        
-        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
-        b_start_positions = torch.Tensor(start_positions).cuda().long()
-        b_end_positions = torch.Tensor(end_positions).cuda().long()
-
-        QA_model.zero_grad()
-        loss, start_scores, end_scores = QA_model(inputs_ids = b_inputs_ids, attention_mask=b_attention_masks, token_type_ids=b_segment_ids, start_positions = b_start_positions, end_positions = b_end_positions)
-        total_train_loss += loss.item()
-        
-        loss.backward()
-        optimizer.step()
-        scheduler.step()
-
-        step+=1
-        if step % 100 == 0 and step != 0:
-            elapsed_epoch_time = time.time()-training_epoch_start_time
-            print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), format_time(elapsed_epoch_time)))
-    avg_train_loss = total_train_loss / step
-    Training_time = format_time(time.time()-training_epoch_start_time)
-    print("Epoch {} average training loss : {}".format(epoch+1, avg_train_loss))
-    print("Epoch {} took : ".format(Training_time))
-
-    # ==============
-    #   Validation
-    # ==============
-
-    print("Now validating...")
-    QA_model.eval()
-    validation_epoch_start_time = time.time()
-
-    total_f1_score = 0
-    total_EM_score = 0
-    total_eval_loss = 0
-    
-
-    special_tokens = []
-    yes_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("yes"))
-    no_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("no"))
-    noans_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("noans"))
-    special_tokens = [yes_token, no_token, noans_token]
-
-    for single_batch in batch(dev_dataset, batch_size):
-        inputs_ids =[]
-        attention_masks =[]
-        segment_ids =[]
-        start_positions =[]
-        end_positions = []
-        ground_truths = []
-        for single_qa_line in single_batch:
-            token_line = single_qa_line['line']
-            start_position = single_qa_line['start_position']
-            end_position = single_qa_line['end_position']
-
-            inputs_ids.append(token_line)
-            segment_ids.append(single_qa_line['segment_id']) 
-            attention_masks.append(single_qa_line['attention_mask'])
-            start_positions.append(start_position)
-            end_positions.append(end_position)
-            ground_truths.append(token_line[start_position:end_position+1])
-        b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-        b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-        b_attention_masks = torch.Tensor(attention_masks).cuda().long()
-        b_start_positions = torch.Tensor(start_positions).cuda().long()
-        b_end_positions = torch.Tensor(end_positions).cuda().long()
-
-        with torch.no_grad():
-            loss, start_scores, end_scores = QA_model(inputs_ids = b_inputs_ids, attention_mask=b_attention_masks, token_type_ids=b_segment_ids, start_positions = b_start_positions, end_positions = b_end_positions)
-
-        total_eval_loss += loss.item()
-
-        start_tokens_idxs = torch.argmax(start_scores, dim=1).tolist()
-        end_tokens_idxs = torch.argmax(end_scores, dim=1).tolist()
-
-        predictions = []
-        for i in range(len(start_tokens_idxs)):
-            token_line = inputs_ids[i]
-            prediction = token_line[start_tokens_idxs[i]:end_tokens_idxs[i]+1]
-            predictions.append(prediction)
-        
-        for i in range(len(start_tokens_idxs)):
+    for epoch in range(num_epochs):
+        training_epoch_start_time = time.time()
+        print("Shuffling dataset...")
+        random.shuffle(train_dataset)
+        print("")
+        print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
+        print('Training...')
+        total_train_loss= 0
+        QA_model.train()
+        step = 0
+        for single_batch in batch(train_dataset, batch_size):
+            inputs_ids =[]
+            attention_masks =[]
+            segment_ids =[]
+            start_positions =[]
+            end_positions = []
+            for single_qa_line in single_batch:
+                inputs_ids.append(single_qa_line['line']) 
+                segment_ids.append(single_qa_line['segment_id']) 
+                attention_masks.append(single_qa_line['attention_mask'])
+                start_positions.append(single_qa_line['start_position'])
+                end_positions.append(single_qa_line['end_position'])
             
-            single_f1_score = f1_score(predictions[i], ground_truths[i], special_tokens)
-            single_EM_score = exact_match_score(prediction, ground_truths[i])
+            b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
+            b_segment_ids = torch.Tensor(segment_ids).cuda().long()
+            b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+            b_start_positions = torch.Tensor(start_positions).cuda().long()
+            b_end_positions = torch.Tensor(end_positions).cuda().long()
 
-            total_f1_score += single_f1_score
-            total_EM_score += single_EM_score
+            QA_model.zero_grad()
+            loss, start_scores, end_scores = QA_model(inputs_ids = b_inputs_ids, attention_mask=b_attention_masks, token_type_ids=b_segment_ids, start_positions = b_start_positions, end_positions = b_end_positions)
+            total_train_loss += loss.item()
+            
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
 
-    avg_eval_loss = total_eval_loss / len(dev_dataset)
-    avg_EM_score = 100.0 * total_EM_score / len(dev_dataset)
-    avg_f1_score = 100.0 * total_f1_score / len(dev_dataset)
-    Validation_time = time.time()-validation_epoch_start_time
+            step+=1
+            if step % 100 == 0 and step != 0:
+                elapsed_epoch_time = time.time()-training_epoch_start_time
+                print("Batch [ {} / {} ] , loss = {} , elapsed = {}".format(step, total_training_steps, loss.item(), format_time(elapsed_epoch_time)))
+        avg_train_loss = total_train_loss / step
+        Training_time = format_time(time.time()-training_epoch_start_time)
+        print("Epoch {} average training loss : {}".format(epoch+1, avg_train_loss))
+        print("Epoch {} took : ".format(Training_time))
 
-    print("Epoch {} average validation loss : {}".format(epoch+1, avg_eval_loss))
-    print("Epoch {} average validation f1 score : {}".format(epoch+1, avg_f1_score))
-    print("Epoch {} average validation EM score : {}".format(epoch+1, avg_EM_score))
+        # ==============
+        #   Validation
+        # ==============
 
-    training_stats.append(
-        {
-            'epoch': epoch+1,
-            'Training_Loss': avg_train_loss,
-            'Valid_Loss': avg_eval_loss,
-            'Valid_f1_score': avg_f1_score,
-            'Valid_EM_score': avg_EM_score,
-            'Training_Time': Training_time,
-            'Validation_Time': Validation_time
-        }
-    )
+        print("Now validating...")
+        QA_model.eval()
+        validation_epoch_start_time = time.time()
 
-#Save the training stats
-print("Saving training stats...")
-with open("Training_stats_qa.json", "w") as fh:
-    json.dump(training_stats, fh)
+        total_f1_score = 0
+        total_EM_score = 0
+        total_eval_loss = 0
+        
 
-# Save the fine_tuned model
-print("Saving the fine-tuned model...")
-QA_model.save_pretrained('./model/qa/')
-tokenizer.save_pretrained('./model/qa/')
-print("Training complete!")
+        special_tokens = []
+        yes_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("yes"))
+        no_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("no"))
+        noans_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("noans"))
+        special_tokens = [yes_token, no_token, noans_token]
+
+        for single_batch in batch(dev_dataset, batch_size):
+            inputs_ids =[]
+            attention_masks =[]
+            segment_ids =[]
+            start_positions =[]
+            end_positions = []
+            ground_truths = []
+            for single_qa_line in single_batch:
+                token_line = single_qa_line['line']
+                start_position = single_qa_line['start_position']
+                end_position = single_qa_line['end_position']
+
+                inputs_ids.append(token_line)
+                segment_ids.append(single_qa_line['segment_id']) 
+                attention_masks.append(single_qa_line['attention_mask'])
+                start_positions.append(start_position)
+                end_positions.append(end_position)
+                ground_truths.append(token_line[start_position:end_position+1])
+            b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
+            b_segment_ids = torch.Tensor(segment_ids).cuda().long()
+            b_attention_masks = torch.Tensor(attention_masks).cuda().long()
+            b_start_positions = torch.Tensor(start_positions).cuda().long()
+            b_end_positions = torch.Tensor(end_positions).cuda().long()
+
+            with torch.no_grad():
+                loss, start_scores, end_scores = QA_model(inputs_ids = b_inputs_ids, attention_mask=b_attention_masks, token_type_ids=b_segment_ids, start_positions = b_start_positions, end_positions = b_end_positions)
+
+            total_eval_loss += loss.item()
+
+            start_tokens_idxs = torch.argmax(start_scores, dim=1).tolist()
+            end_tokens_idxs = torch.argmax(end_scores, dim=1).tolist()
+
+            predictions = []
+            for i in range(len(start_tokens_idxs)):
+                token_line = inputs_ids[i]
+                prediction = token_line[start_tokens_idxs[i]:end_tokens_idxs[i]+1]
+                predictions.append(prediction)
+            
+            for i in range(len(start_tokens_idxs)):
+                
+                single_f1_score = f1_score(predictions[i], ground_truths[i], special_tokens)
+                single_EM_score = exact_match_score(prediction, ground_truths[i])
+
+                total_f1_score += single_f1_score
+                total_EM_score += single_EM_score
+
+        avg_eval_loss = total_eval_loss / len(dev_dataset)
+        avg_EM_score = 100.0 * total_EM_score / len(dev_dataset)
+        avg_f1_score = 100.0 * total_f1_score / len(dev_dataset)
+        Validation_time = time.time()-validation_epoch_start_time
+
+        print("Epoch {} average validation loss : {}".format(epoch+1, avg_eval_loss))
+        print("Epoch {} average validation f1 score : {}".format(epoch+1, avg_f1_score))
+        print("Epoch {} average validation EM score : {}".format(epoch+1, avg_EM_score))
+
+        training_stats.append(
+            {
+                'epoch': epoch+1,
+                'Training_Loss': avg_train_loss,
+                'Valid_Loss': avg_eval_loss,
+                'Valid_f1_score': avg_f1_score,
+                'Valid_EM_score': avg_EM_score,
+                'Training_Time': Training_time,
+                'Validation_Time': Validation_time
+            }
+        )
+
+    #Save the training stats
+    print("Saving training stats...")
+    with open("Training_stats_qa.json", "w") as fh:
+        json.dump(training_stats, fh)
+
+    # Save the fine_tuned model
+    print("Saving the fine-tuned model...")
+    QA_model.save_pretrained('./model/qa/')
+    tokenizer.save_pretrained('./model/qa/')
+    print("Training complete!")
 
 
 
