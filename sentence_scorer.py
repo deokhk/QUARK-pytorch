@@ -143,6 +143,8 @@ def prepare_single_qapair(qapair, tokenizer):
         qapair_for_training.append(para_for_training)
     return qapair_for_training
             
+
+
 def prepare_datas(preprocessed_file, data_category):
     # Perform tokenizing, Create attention mask & segment id for all datas.
     print('Loading preprocessed file...')
@@ -155,7 +157,6 @@ def prepare_datas(preprocessed_file, data_category):
     print("Saving {}_data".format(data_category))
     with open(data_category+"_data.json", "w") as fh:
         json.dump(prepared_datas, fh)
-
 
 
 def train_and_evaluate_ras_model():

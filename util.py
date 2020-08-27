@@ -18,23 +18,7 @@ def format_time(elapsed):
     elapsed_rounded = int(round((elapsed)))
     return str(datetime.timedelta(seconds=elapsed_rounded))
 
-def f1_score(prediction, ground_truth, special_tokens):
-    if prediction in special_tokens and prediction != ground_truth:
-        return 0
-    if ground_truth in special_tokens and prediction != ground_truth:
-        return 0
 
-    common = Counter(prediction) & Counter(ground_truth)
-    num_same = sum(common.values())
-    if num_same == 0:
-        return 0
-    
-    precision = 1.0 * num_same / len(prediction)
-    recall = 1.0 * num_same / len(ground_truth)
-    f1 = (2 * precision * recall) / (precision + recall)
-    return f1
 
-def exact_match_score(prediction, ground_truth):
-    return (prediction == ground_truth)
 
 
