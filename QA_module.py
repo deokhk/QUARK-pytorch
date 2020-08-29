@@ -48,11 +48,6 @@ def preprocess_single_qapair(single_hotpot_qapair, model, tokenizer, answer):
             if len(sentence_line_tokens) + token_len_without_sentence >512:
                 sentence_line_tokens = sentence_line_tokens[:512-token_len_without_sentence]
             indexed_tokens = line_before_sentence_tokens + sentence_line_tokens + line_after_sentence_tokens
-            if len(indexed_tokens) > 512:
-                print("Something wrong!!!!!")
-                print("sentence line token length: ", len(sentence_line_tokens))
-                print("token length without sentence: ", token_len_without_sentence)
-                print("Indexed token length: ", len(indexed_tokens))
             indexed_tokens = indexed_tokens + [0 for _ in range(512-len(indexed_tokens))]
             attention_mask  = [1 for _ in range(len(indexed_tokens))] + [0 for _ in range(512-len(indexed_tokens))]
             token_type_id = [0 for _ in range(len(line_before_sentence_tokens))] + [1 for _ in range(len(sentence_line_tokens))] 
@@ -164,8 +159,8 @@ def find_best_answer(start_scores, end_scores):
             valid_start_token_idxs.append(start_tokens_idxs[idx])
             valid_end_tokens_idxs.append(end_tokens_idxs[idx])
         else:
-            cur_start_token_score = start_scores_l[idx, :]
-            cur_end_token_score = end_scores_l[idx, :]
+            cur_start_token_score = start_scores_l[idx]
+            cur_end_token_score = end_scores_l[idx]
 
             max_score = -100000000
             max_start_idx = 0
@@ -193,17 +188,17 @@ def train_and_evaluate_QA_module():
     print("Loading tokenizer for question answering module..")
     qa_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
-    #print("Loading sentence scorer model..")
-    #rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
-    #rnas_model.cuda()
-    #rnas_model.eval()
+    print("Loading sentence scorer model..")
+    rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
+    rnas_model.cuda()
+    rnas_model.eval()
 
-    #print("Preparing training data..")
-    #prepare_file_for_qa("hotpot_train_v1.1.json", "Training", rnas_model, ss_tokenizer, qa_tokenizer)
-    #print("Preparing dev data..")
-    #prepare_file_for_qa("hotpot_dev_distractor_v1.json", "Dev", rnas_model, ss_tokenizer, qa_tokenizer)
+    print("Preparing training data..")
+    prepare_file_for_qa("hotpot_train_v1.1.json", "Training", rnas_model, ss_tokenizer, qa_tokenizer)
+    print("Preparing dev data..")
+    prepare_file_for_qa("hotpot_dev_distractor_v1.json", "Dev", rnas_model, ss_tokenizer, qa_tokenizer)
 
-    #rnas_model.cpu()
+    rnas_model.cpu()
 
     print("Loading training datasets..")
     train_dataset = json.load(open("Training_data_for_qa.json", 'r'))
@@ -349,7 +344,7 @@ def train_and_evaluate_QA_module():
             for i in range(len(start_tokens_idxs)):
                 
                 single_f1_score, _, _ = f1_score(predicted_answers[i], ground_truths[i])
-                single_EM_score, _, _ = exact_match_score(predicted_answers[i], ground_truths[i])
+                single_EM_score = exact_match_score(predicted_answers[i], ground_truths[i])
 
                 total_f1_score += single_f1_score
                 total_EM_score += single_EM_score
@@ -383,13 +378,9 @@ def train_and_evaluate_QA_module():
     # Save the fine_tuned model
     print("Saving the fine-tuned model...")
     QA_model.save_pretrained('./model/qa/')
-    print("Saving the tokenizer...")
-    qa_tokenizer.save_pretrained('./model/qa/')
     print("Training complete!")
 
-
-        
-
+train_and_evaluate_QA_module()
     
 
 

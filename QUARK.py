@@ -28,8 +28,6 @@ class Quark(nn.Module):
         qa_tokenizer = self.qa_tokenizer
         
 
-        rnas.cuda()
-        rnas.eval()
 
         inputs_ids =[]
         attention_masks =[]
@@ -104,7 +102,7 @@ class Quark(nn.Module):
         # Now, with predicted answers, we use ras model to score each sentence in D to find sentences supporting the chosen answer.
         qapairs_predicted_supporting_facts_with_id = {}
         for qapair_idx, qapair in enumerate(hotpot_qa_pairs):
-            ras_sorted_sentences = preprocess_single_qapair(qapair, ras, tokenizer, predicted_answers[qapair_idx])
+            ras_sorted_sentences = preprocess_single_qapair(qapair, ras, ss_tokenizer, predicted_answers[qapair_idx])
             
             paragraphs_score_info = []
             for para in qapair['context']:
