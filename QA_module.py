@@ -189,7 +189,7 @@ def train_and_evaluate_QA_module():
     qa_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
     print("Loading sentence scorer model..")
-    rnas_model = BertForSequenceClassification.from_pretrained("./rnas_test/")
+    rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas/")
     rnas_model.cuda()
     rnas_model.eval()
 
