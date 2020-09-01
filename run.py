@@ -29,15 +29,15 @@ def predict(data_source, prediction_file):
     QP = Quark(rnas_model, ras_model, QA_model, ss_tokenizer, qa_tokenizer)
 
     print("All ready, start prediction")
-    batch_size = 1
+    batch_size = 4
     predicted_answers = {}
     predicted_supporting_facts = {}
 
     total_batch_num = 0
-    if len(dataset) %4 ==0:
-        total_batch_num = len(dataset) // 4
+    if len(dataset) % batch_size ==0:
+        total_batch_num = len(dataset) // batch_size
     else:
-        total_batch_num = len(dataset) //4 +1
+        total_batch_num = len(dataset) // batch_size +1
     
     batch_count = 0
     for single_batch in batch(dataset, batch_size):
@@ -48,7 +48,6 @@ def predict(data_source, prediction_file):
         
         if batch_count % 10 ==0:
             print("[Predicted / Total ] : {} / {}".format(batch_count, total_batch_num))
-        break
     prediction_data = {}
     prediction_data['answer'] = predicted_answers
     prediction_data['sp'] = predicted_supporting_facts
@@ -56,7 +55,5 @@ def predict(data_source, prediction_file):
     with open(prediction_file, 'w') as f:
         json.dump(prediction_data, f)
 
-    print(prediction_data)
-predict("hotpot_dev_distractor_v1.json", "dev_distractor_pred.json")
 
 

@@ -184,21 +184,21 @@ def find_best_answer(start_scores, end_scores):
 
 def train_and_evaluate_QA_module():
     print("Loading tokenizer for sentence scoring module..")
-   # ss_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
+    ss_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
     print("Loading tokenizer for question answering module..")
     qa_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
     print("Loading sentence scorer model..")
-   # rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas/")
-   # rnas_model.cuda()
-   # rnas_model.eval()
+    rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas/")
+    rnas_model.cuda()
+    rnas_model.eval()
 
     print("Preparing training data..")
-   # prepare_file_for_qa("hotpot_train_v1.1.json", "Training", rnas_model, ss_tokenizer, qa_tokenizer)
+    prepare_file_for_qa("hotpot_train_v1.1.json", "Training", rnas_model, ss_tokenizer, qa_tokenizer)
     print("Preparing dev data..")
-   # prepare_file_for_qa("hotpot_dev_distractor_v1.json", "Dev", rnas_model, ss_tokenizer, qa_tokenizer)
+    prepare_file_for_qa("hotpot_dev_distractor_v1.json", "Dev", rnas_model, ss_tokenizer, qa_tokenizer)
 
-    #rnas_model.cpu()
+    rnas_model.cpu()
 
     print("Loading training datasets..")
     train_dataset = json.load(open("Training_data_for_qa.json", 'r'))
@@ -211,7 +211,7 @@ def train_and_evaluate_QA_module():
     # QA_model.resize_token_embeddings(len(qa_tokenizer))
     QA_model.cuda()
 
-    batch_size = 4
+    batch_size = 8
     num_epochs = 3
     optimizer = optim.Adam(QA_model.parameters(), lr=1e-5, weight_decay=0.01)
     total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
@@ -379,6 +379,8 @@ def train_and_evaluate_QA_module():
     print("Saving the fine-tuned model...")
     QA_model.save_pretrained('./model/qa/')
     print("Training complete!")
+    
+train_and_evaluate_QA_module()
 
 
     
