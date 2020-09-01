@@ -35,6 +35,7 @@ class Quark(nn.Module):
 
         for qapair in hotpot_qa_pairs:
             rnas_sorted_sentences = preprocess_single_qapair(qapair, rnas, ss_tokenizer, "[MASK]")
+            print("rnas_sorted_sentences : ",rnas_sorted_sentences)
             line_before_E_tokens =qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize("[CLS] " + qapair['question'] + " [SEP] "))
             line_after_E_tokens = qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize(" yes no noans [SEP]"))
             
