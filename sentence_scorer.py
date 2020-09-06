@@ -86,14 +86,15 @@ def prepare_single_qapair(qapair, tokenizer):
     answer = qapair['answer']
     paragraphs = qapair['paragraphs']
     qapair_for_training = []
+
+    line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
+    line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
+    segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
+    segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
+
     for para in paragraphs:
         para_for_training= []
         indexed_tokens = []
-        line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
-        segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
-
-        line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
-        segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
 
         para_tokens = []
 
@@ -102,11 +103,11 @@ def prepare_single_qapair(qapair, tokenizer):
             para_tokens += sentence_token
 
         len_without_para_tokens = len(line_before_para_tokens) + len(line_after_para_tokens)
-        # If a input has more than 512 tokens, we restrict the input to 512.
+        # If a input has more than MAX_LEN tokens, we restrict the input to MAX_LEN.
 
         allowed_para_length = len(para_tokens)
-        if len(para_tokens)+len_without_para_tokens>512:
-            para_tokens = para_tokens[0:512-len_without_para_tokens]
+        if len(para_tokens)+len_without_para_tokens> MAX_LEN:
+            para_tokens = para_tokens[0:MAX_LEN-len_without_para_tokens]
             allowed_para_length = len(para_tokens)
 
         indexed_tokens = line_before_para_tokens + para_tokens + line_after_para_tokens

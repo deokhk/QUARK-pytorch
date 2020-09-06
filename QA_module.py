@@ -13,20 +13,56 @@ from util import batch, format_time
 from hotpot_evaluate_v1 import f1_score, exact_match_score
 
 def preprocess_single_qapair(single_hotpot_qapair, model, tokenizer, answer):
+    MAX_LEN = 512
     question = single_hotpot_qapair['question']
     paragraphs = single_hotpot_qapair['context']
-    line_before_sentence_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
-    line_after_sentence_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
-    token_len_without_sentence = len(line_before_sentence_tokens) + len(line_after_sentence_tokens)
-    if token_len_without_sentence > 512:
-       SEP_id = line_after_sentence_tokens[-1]
-       line_len = len(line_after_sentence_tokens)
-       line_after_sentence_tokens = line_after_sentence_tokens[:min(line_len//2, 10)]
-       line_after_sentence_tokens.append(SEP_id)
+    line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
+    line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
+    len_without_para_tokens = len(line_before_para_tokens) + len(line_after_para_tokens)
+    
+    if len_without_para_tokens > MAX_LEN:
+       SEP_id = line_after_para_tokens[-1]
+       line_len = len(line_after_para_tokens)
+       line_after_para_tokens = line_after_para_tokens[:min(line_len//2, 10)]
+       line_after_para_tokens.append(SEP_id)
+       len_without_para_tokens =  len(line_before_para_tokens) + len(line_after_para_tokens)
+    
+    segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
+    segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
+
     sentences = []
     
     for idx, para in enumerate(paragraphs):
+        para_tokens = []
+        for sentence in para[1]:
+            sentence_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence))
+            para_tokens += sentence_tokens
+        
+        allowed_para_length = len(para_tokens)
+        if len(para_tokens)+len_without_para_tokens>MAX_LEN:
+            para_tokens = para_tokens[0:MAX_LEN-len_without_para_tokens]
+            allowed_para_length = len(para_tokens)
+
+        indexed_tokens = line_before_para_tokens + para_tokens + line_after_para_tokens
+        attention_mask = [1 for _ in range(len(indexed_tokens))] + [0 for _ in range(MAX_LEN-len(indexed_tokens))]
+
+        # Pad the tokens to MAX_LEN
+        indexed_tokens += [0 for _ in range(MAX_LEN-len(indexed_tokens))]
+        pos = 0
+
         for sidx, sentence in enumerate(para[1]):
+            sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence))
+            segment_para = [0 for _ in range(allowed_para_length)]
+            if pos+len(sentence_token) > allowed_para_length:
+                if pos < allowed_para_length:
+                    segment_para[pos:] = [1 for _ in range(allowed_para_length - pos)]
+            else:
+                segment_para[pos:pos+len(sentence_token)] = [1 for _ in range(len(sentence_token))]
+                pos = pos + len(sentence_token)
+
+            sentence_segment_id = segment_before_para + segment_para + segment_after_para
+            sentence_segment_id += [0 for _ in range(MAX_LEN-len(sentence_segment_id))]
+
             single_sentence_info ={}
             single_sentence_info['score'] = 0
             single_sentence_info['para'] = idx
@@ -34,8 +70,12 @@ def preprocess_single_qapair(single_hotpot_qapair, model, tokenizer, answer):
             single_sentence_info['sentence_idx_in_para'] = sidx
             single_sentence_info['title'] = para[0]
             single_sentence_info['first_sentence'] = para[1][0]
-            sentences.append(single_sentence_info)
+            single_sentence_info['indexed_tokens'] = indexed_tokens
+            single_sentence_info['attention_mask'] = attention_mask
+            single_sentence_info['segment_id'] = sentence_segment_id
     
+            sentences.append(single_sentence_info)
+
     pos = 0
     for single_batch in batch(sentences, 8):
         
@@ -44,17 +84,9 @@ def preprocess_single_qapair(single_hotpot_qapair, model, tokenizer, answer):
         segment_ids = []
 
         for single_sentence_info in single_batch:
-            sentence_line_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(single_sentence_info['sentence']))
-            if len(sentence_line_tokens) + token_len_without_sentence >512:
-                sentence_line_tokens = sentence_line_tokens[:512-token_len_without_sentence]
-            indexed_tokens = line_before_sentence_tokens + sentence_line_tokens + line_after_sentence_tokens
-            indexed_tokens = indexed_tokens + [0 for _ in range(512-len(indexed_tokens))]
-            attention_mask  = [1 for _ in range(len(indexed_tokens))] + [0 for _ in range(512-len(indexed_tokens))]
-            token_type_id = [0 for _ in range(len(line_before_sentence_tokens))] + [1 for _ in range(len(sentence_line_tokens))] 
-            token_type_id = token_type_id + [0 for _ in range(512-len(token_type_id))]
-            inputs_ids.append(indexed_tokens)
-            attention_masks.append(attention_mask)
-            segment_ids.append(token_type_id)
+            inputs_ids.append(single_sentence_info['indexed_tokens'])
+            attention_masks.append(single_sentence_info['attention_mask'])
+            segment_ids.append(single_sentence_info['segment_id'])
 
         b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
         b_segment_ids = torch.Tensor(segment_ids).cuda().long()
