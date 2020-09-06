@@ -411,8 +411,6 @@ def train_and_evaluate_QA_module():
     print("Saving the fine-tuned model...")
     QA_model.save_pretrained('./model/qa/')
     print("Training complete!")
-    
-train_and_evaluate_QA_module()
 
 
     
