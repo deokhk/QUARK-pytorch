@@ -106,12 +106,25 @@ class Quark(nn.Module):
             ras_sorted_sentences = preprocess_single_qapair(qapair, ras, ss_tokenizer, predicted_answers[qapair_idx])
             
             paragraphs_score_info = []
+            
             for para in qapair['context']:
                 para_info = {}
                 para_info['title'] = para[0]
                 para_info['sum_score'] = 0
                 para_info['sentences'] = []
                 paragraphs_score_info.append(para_info)
+            
+            # There might be cases where our sentence scorer returns less than 2 pargraphs with some of those sentences's score are greater than 0.
+            # In this case, we pick 2 pagraphs containing highest scored(<0) sentence. In those paragraphs, highest scored sentences  will be  
+            # classified as supporting facts.
+            neg_highest_score_sentence_info = []
+
+            for para in qapair['context']:
+                para_info = {}
+                para_info['title'] = para[0]
+                para_info['highest_score'] = -100000000
+                para_info['sentence_idx'] = 0
+                neg_highest_score_sentence_info.append(para_info)
             
             for single_sentence_info in ras_sorted_sentences:
                 para_idx = single_sentence_info['para']
@@ -120,19 +133,40 @@ class Quark(nn.Module):
                 if supporting_fact_score >=0:
                     paragraphs_score_info[para_idx]['sum_score']+=supporting_fact_score
                     paragraphs_score_info[para_idx]['sentences'].append(sentence_idx_in_para)
+                else:
+                    cur_highest_score =  neg_highest_score_sentence_info[para_idx]['highest_score'] 
+                    if cur_highest_score < supporting_fact_score:
+                        cur_highest_score = supporting_fact_score
+                        neg_highest_score_sentence_info[para_idx]['sentence_idx'] = sentence_idx_in_para
+
             
             score_sorted_paragraphs = sorted(paragraphs_score_info, key=(lambda x: x['sum_score']), reverse=True)
 
+            nh_score_sorted_paragraphs = sorted(neg_highest_score_sentence_info, key=(lambda x: x['highest_score']), reverse=True)
             # In hotpotqa, supporting facts always come from exactly two paragraphs.
-            supporting_facts = []
             
+            supporting_facts = []
+            para_with_sp_count = 0
+
             for sentence_idx in score_sorted_paragraphs[0]['sentences']:
                 supporting_fact = [score_sorted_paragraphs[0]['title'], sentence_idx]
                 supporting_facts.append(supporting_fact)
+                para_with_sp_count+=1
+
             for sentence_idx in score_sorted_paragraphs[1]['sentences']:
                 supporting_fact = [score_sorted_paragraphs[1]['title'], sentence_idx]
                 supporting_facts.append(supporting_fact)
+                para_with_sp_count+=1
             
+            if para_with_sp_count!=2:
+                remain_para_count = 2 - para_with_sp_count
+                for i in range(remain_para_count):
+                    supporting_fact = [nh_score_sorted_paragraphs[i]['title'], nh_score_sorted_paragraphs[i]['sentence_idx']]
+                    supporting_facts.append(supporting_fact)
+
+
+            
+
             qapair_id = hotpot_qa_pairs[qapair_idx]['_id']
             qapairs_predicted_supporting_facts_with_id[qapair_id] = supporting_facts
 
