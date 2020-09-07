@@ -3,7 +3,7 @@ import numpy
 import ujson as json
 import numpy as np
 import random
-from transformers import BertTokenizer, BertModel, BertConfig, BertForSequenceClassification, BertForQuestionAnswering, get_linear_schedule_with_warmup
+from transformers import BertTokenizer, AutoTokenizer, BertModel, BertConfig, BertForSequenceClassification, AutoModelForQuestionAnswering, get_linear_schedule_with_warmup
 from QUARK import Quark
 from util import batch
 
@@ -14,9 +14,9 @@ def predict(data_source, prediction_file):
     print("Loading rnas, ras, QA model and tokenizer..")
     rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas")
     ras_model = BertForSequenceClassification.from_pretrained("./model/ras/")
-    QA_model = BertForQuestionAnswering.from_pretrained("./model/qa/")
+    QA_model = AutoModelForQuestionAnswering.from_pretrained("./model/qa/")
     ss_tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
-    qa_tokenizer = BertTokenizer.from_pretrained("bert-base-cased")
+    qa_tokenizer = AutoTokenizer.from_pretrained("SpanBERT/spanbert-base-cased")
 
     rnas_model.cuda()
     rnas_model.eval()

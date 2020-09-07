@@ -7,7 +7,7 @@ import numpy as np
 import time
 import datetime
 import random
-from transformers import BertTokenizer, BertModel, BertConfig, BertForSequenceClassification, BertForQuestionAnswering, get_linear_schedule_with_warmup
+from transformers import BertTokenizer, BertModel, AutoTokenizer,AutoModelForQuestionAnswering, BertConfig, BertForSequenceClassification, get_linear_schedule_with_warmup
 from collections import Counter
 from util import batch, format_time
 from hotpot_evaluate_v1 import f1_score, exact_match_score
@@ -218,7 +218,7 @@ def train_and_evaluate_QA_module():
     print("Loading tokenizer for sentence scoring module..")
     ss_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
     print("Loading tokenizer for question answering module..")
-    qa_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
+    qa_tokenizer = AutoTokenizer.from_pretrained('SpanBERT/spanbert-base-cased')
 
     print("Loading sentence scorer model..")
     rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas/")
@@ -239,7 +239,7 @@ def train_and_evaluate_QA_module():
     dev_dataset = json.load(open("Dev_data_for_qa.json"))
     
     print("Loading QA model..")	
-    QA_model = BertForQuestionAnswering.from_pretrained('bert-base-cased')
+    QA_model = AutoModelForQuestionAnswering.from_pretrained('SpanBERT/spanbert-base-cased')
     # QA_model.resize_token_embeddings(len(qa_tokenizer))
     QA_model.cuda()
 
