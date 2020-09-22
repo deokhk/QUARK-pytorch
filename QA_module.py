@@ -7,7 +7,7 @@ import numpy as np
 import time
 import datetime
 import random
-from transformers import BertTokenizer, BertModel, AutoTokenizer,AutoModelForQuestionAnswering, BertConfig, BertForSequenceClassification, get_linear_schedule_with_warmup
+from transformers import BertTokenizer, BertModel, AutoTokenizer,AutoModelForQuestionAnswering, BertForQuestionAnswering, BertConfig, BertForSequenceClassification, get_linear_schedule_with_warmup
 from collections import Counter
 from util import batch, format_time
 from hotpot_evaluate_v1 import f1_score, exact_match_score
@@ -109,21 +109,36 @@ def prepare_file_for_qa(original_hotpotqa_file, data_category, rnas_model, ss_to
     start_time = time.time()
     prepared_datas = []
     for myidx, qapair in enumerate(data):
+        para_highest_score = {}
+        for para_idx in range(len(qapair['context'])):
+            para_highest_score[para_idx] = -99999
+
         single_qa_line={}
         sorted_sentences = preprocess_single_qapair(qapair, rnas_model, ss_tokenizer, "[MASK]")
         line_before_E_tokens = qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize("[CLS] " + qapair['question'] + " [SEP] "))
         line_after_E_tokens = qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize(" yes no noans [SEP]"))
         
         E_tokens=[]        
-        is_new_paragraphs = [1 for _ in range(len(qapair['context']))]
+
+        # pick two paragraph with highest score
         for single_sentence_info in sorted_sentences:
-            E_tokens += qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize(single_sentence_info['sentence']))
-            para_idx = single_sentence_info['para']
-            if is_new_paragraphs[para_idx] == 1:
-                para_first_sentence_and_title = single_sentence_info['first_sentence'] + "<t>" +single_sentence_info['title'] + "</t>"
-                E_tokens += qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize(para_first_sentence_and_title))
-                is_new_paragraphs[para_idx] = 0
+            sentence_para_idx = single_sentence_info['para']
+            sentence_score = single_sentence_info['score']
+            if para_highest_score[sentence_para_idx] < sentence_score:
+                para_highest_score[sentence_para_idx] = sentence_score
+        
+        para_highest_score_sorted = sorted(para_highest_score.items(), key=(lambda x: x[1]), reverse=True)
+        selected_para_idx = [para_highest_score_sorted[0][0], para_highest_score_sorted[1][0]]
+
+       
+        for para_idx in selected_para_idx:
+            para_title = qapair['context'][para_idx][0]
+            para_sentences = qapair['context'][para_idx][1]
+            E_tokens += qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize("<t>" +para_title + "</t>"))
+            for sentence in para_sentences:
+                E_tokens += qa_tokenizer.convert_tokens_to_ids(qa_tokenizer.tokenize(sentence))
             
+
             if len(line_before_E_tokens + E_tokens + line_after_E_tokens) > 512:
                 # truncate E_tokens to fit in 512
                 E_tokens = E_tokens[:512-len(line_before_E_tokens + line_after_E_tokens)]
@@ -218,7 +233,7 @@ def train_and_evaluate_QA_module():
     print("Loading tokenizer for sentence scoring module..")
     ss_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
     print("Loading tokenizer for question answering module..")
-    qa_tokenizer = AutoTokenizer.from_pretrained('SpanBERT/spanbert-base-cased')
+    qa_tokenizer = BertTokenizer.from_pretrained('bert-base-cased')
 
     print("Loading sentence scorer model..")
     rnas_model = BertForSequenceClassification.from_pretrained("./model/rnas/")
@@ -239,11 +254,11 @@ def train_and_evaluate_QA_module():
     dev_dataset = json.load(open("Dev_data_for_qa.json"))
     
     print("Loading QA model..")	
-    QA_model = AutoModelForQuestionAnswering.from_pretrained('SpanBERT/spanbert-base-cased')
+    QA_model = BertForQuestionAnswering.from_pretrained('bert-base-cased')
     # QA_model.resize_token_embeddings(len(qa_tokenizer))
     QA_model.cuda()
 
-    batch_size = 8
+    batch_size = 4
     num_epochs = 3
     optimizer = optim.Adam(QA_model.parameters(), lr=1e-5, weight_decay=0.01)
     total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
@@ -409,11 +424,11 @@ def train_and_evaluate_QA_module():
 
     # Save the fine_tuned model
     print("Saving the fine-tuned model...")
-    QA_model.save_pretrained('./model/qa/')
+    QA_model.save_pretrained('./model/qa_bert_base/')
     print("Training complete!")
 
+train_and_evaluate_QA_module()
 
-    
 
 
 
