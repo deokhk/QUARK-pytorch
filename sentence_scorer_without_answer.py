@@ -173,7 +173,7 @@ def train_and_evaluate_ras_model():
     batch_size = 3
     num_epochs= 4
     MAX_batch_token_size = 5625
-
+    accumulation_steps = 2
     print("Preprocess training data")
     preprocess_file("hotpot_train_rnas.json")
     print("Prepare training data")
@@ -246,20 +246,28 @@ def train_and_evaluate_ras_model():
                 del attention_masks[drop_sentence_idx]
                 del segment_ids[drop_sentence_idx]
                 del labels[drop_sentence_idx]
-            b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
-            b_segment_ids = torch.Tensor(segment_ids).cuda().long()
-            b_attention_masks = torch.Tensor(attention_masks).cuda().long()
-            b_labels = torch.Tensor(labels).cuda().long()
 
             sentence_scorer_model.zero_grad()
+            loss = 0
+            for i in range(accumulation_steps):
+                num_elem = len(inputs_ids)
+                train_size = 0
+                if num_elem % accumulation_steps == 0:
+                    train_size = num_elem // accumulation_steps
+                else:
+                    train_size = (num_elem // accumulation_steps) + 1
+                b_inputs_ids = torch.Tensor(inputs_ids[i* train_size:min((i+1)*train_size, num_elem)]).cuda().long()
+                b_segment_ids = torch.Tensor(segment_ids[i* train_size:min((i+1)*train_size, num_elem)]).cuda().long()
+                b_attention_masks = torch.Tensor(attention_masks[i* train_size:min((i+1)*train_size, num_elem)]).cuda().long()
+                b_labels = torch.Tensor(labels[i* train_size:min((i+1)*train_size, num_elem)]).cuda().long()
+                loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
+                loss = loss / accumulation_steps
+                total_train_loss += loss.item()
+                loss.backward()
+                if (i+1) % accumulation_steps == 0:
+                    optimizer.step()
+                    scheduler.step()
             
-            loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
-            total_train_loss += loss.item()
-
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-
             step+=1
             if step % 100 ==0 and step != 0:
                 elapsed_epoch_time = time.time()-training_epoch_start_time
