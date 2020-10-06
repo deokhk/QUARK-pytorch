@@ -10,7 +10,10 @@ from joblib import Parallel, delayed
 from torch.utils.data import DataLoader
 from transformers import BertTokenizer, BertModel, BertForSequenceClassification, get_linear_schedule_with_warmup
 from util import batch, flat_accuracy
+import pickle
 
+para_length_list = []
+qapair_length_list = []
 def process_article(qapair):
         single_data = {}
         single_data['question'] = qapair['question']
@@ -92,6 +95,7 @@ def prepare_single_qapair(qapair, tokenizer):
     segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
     segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
 
+    qapair_len = len(line_before_para_tokens) + len(line_after_para_tokens)
     for para in paragraphs:
         para_for_training= []
         indexed_tokens = []
@@ -101,6 +105,9 @@ def prepare_single_qapair(qapair, tokenizer):
         for sentence in para['sentences']:
             sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
             para_tokens += sentence_token
+
+        qapair_len+=len(para_tokens)
+        para_length_list.append(len(para_tokens))
 
         len_without_para_tokens = len(line_before_para_tokens) + len(line_after_para_tokens)
         # If a input has more than MAX_LEN tokens, we restrict the input to MAX_LEN.
@@ -142,6 +149,7 @@ def prepare_single_qapair(qapair, tokenizer):
 
         para_for_training.append(para_for_training_sentence_list)
         qapair_for_training.append(para_for_training)
+    qapair_length_list.append(qapair_len)
     return qapair_for_training
             
 
@@ -158,7 +166,8 @@ def prepare_datas(preprocessed_file, data_category):
     print("Saving {}_data".format(data_category))
     with open(data_category+"_data.json", "w") as fh:
         json.dump(prepared_datas, fh)
-
+    
+    
 
 def train_and_evaluate_ras_model():
     batch_size = 3
@@ -166,15 +175,19 @@ def train_and_evaluate_ras_model():
     MAX_batch_token_size = 5625
 
     print("Preprocess training data")
-    # preprocess_file("hotpot_train_v1.1.json")
+    preprocess_file("hotpot_train_v1.1.json")
     print("Prepare training data")
-    # prepare_datas("preprocessed_hotpot_train_v1.1.json", "Training")
+    prepare_datas("preprocessed_hotpot_train_v1.1.json", "Training")
+
+
+    para_length_list = []
+    qapair_length_list = []
 
     print("Preprocess dev data")
     preprocess_file("hotpot_dev_distractor_v1.json")
     print("Prepare dev data")
     prepare_datas("preprocessed_hotpot_dev_distractor_v1.json", "Dev")
-
+    
     print("Loading training datasets..")
     train_dataset = json.load(open("Training_data.json", 'r'))
 
@@ -237,13 +250,13 @@ def train_and_evaluate_ras_model():
                 del attention_masks[drop_sentence_idx]
                 del segment_ids[drop_sentence_idx]
                 del labels[drop_sentence_idx]
-
             b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
             b_segment_ids = torch.Tensor(segment_ids).cuda().long()
             b_attention_masks = torch.Tensor(attention_masks).cuda().long()
             b_labels = torch.Tensor(labels).cuda().long()
 
             sentence_scorer_model.zero_grad()
+            
             loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
             total_train_loss += loss.item()
 
@@ -335,13 +348,13 @@ def train_and_evaluate_ras_model():
 
     #Save the training stats
     print("Saving training stats...")
-    with open("Training_stats.json", "w") as fh:
+    with open("Training_stats_ras.json", "w") as fh:
         json.dump(training_stats, fh)
 
     # Save the fine-tuned model
     print("Saving the fine-tuned model..")
-    sentence_scorer_model.save_pretrained('./')
+    sentence_scorer_model.save_pretrained('./model/ras/')
     print("Training complete!")
 
-
+train_and_evaluate_ras_model()
 

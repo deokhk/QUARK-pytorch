@@ -10,7 +10,10 @@ from joblib import Parallel, delayed
 from torch.utils.data import DataLoader
 from transformers import BertTokenizer, BertModel, BertForSequenceClassification, get_linear_schedule_with_warmup
 from util import batch, flat_accuracy
+import pickle
 
+para_length_list = []
+qapair_length_list = []
 def process_article(qapair):
         single_data = {}
         single_data['question'] = qapair['question']
@@ -76,8 +79,8 @@ def preprocess_file(filename):
 
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(process_article)(article) for article in data)
     preprocessed_datas = [e for e in outputs]
-    print("Saving preprocessed_wa_{}".format(filename))
-    with open("preprocessed_wa_"+filename, "w") as fh:
+    print("Saving preprocessed_{}".format(filename))
+    with open("preprocessed_"+filename, "w") as fh:
         json.dump(preprocessed_datas, fh)
 
 def prepare_single_qapair(qapair, tokenizer):
@@ -86,14 +89,16 @@ def prepare_single_qapair(qapair, tokenizer):
     answer = qapair['answer']
     paragraphs = qapair['paragraphs']
     qapair_for_training = []
+
+    line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
+    line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
+    segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
+    segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
+
+    qapair_len = len(line_before_para_tokens) + len(line_after_para_tokens)
     for para in paragraphs:
         para_for_training= []
         indexed_tokens = []
-        line_before_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize("[CLS] " + question + " [SEP] "))
-        segment_before_para = [0 for _ in range(len(line_before_para_tokens))]
-
-        line_after_para_tokens = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(" [SEP] " + answer + " [SEP]"))
-        segment_after_para = [0 for _ in range(len(line_after_para_tokens))]
 
         para_tokens = []
 
@@ -101,12 +106,15 @@ def prepare_single_qapair(qapair, tokenizer):
             sentence_token = tokenizer.convert_tokens_to_ids(tokenizer.tokenize(sentence['sentence']))
             para_tokens += sentence_token
 
+        qapair_len+=len(para_tokens)
+        para_length_list.append(len(para_tokens))
+
         len_without_para_tokens = len(line_before_para_tokens) + len(line_after_para_tokens)
-        # If a input has more than 512 tokens, we restrict the input to 512.
+        # If a input has more than MAX_LEN tokens, we restrict the input to MAX_LEN.
 
         allowed_para_length = len(para_tokens)
-        if len(para_tokens)+len_without_para_tokens>512:
-            para_tokens = para_tokens[0:512-len_without_para_tokens]
+        if len(para_tokens)+len_without_para_tokens> MAX_LEN:
+            para_tokens = para_tokens[0:MAX_LEN-len_without_para_tokens]
             allowed_para_length = len(para_tokens)
 
         indexed_tokens = line_before_para_tokens + para_tokens + line_after_para_tokens
@@ -141,8 +149,11 @@ def prepare_single_qapair(qapair, tokenizer):
 
         para_for_training.append(para_for_training_sentence_list)
         qapair_for_training.append(para_for_training)
+    qapair_length_list.append(qapair_len)
     return qapair_for_training
             
+
+
 def prepare_datas(preprocessed_file, data_category):
     # Perform tokenizing, Create attention mask & segment id for all datas.
     print('Loading preprocessed file...')
@@ -153,34 +164,33 @@ def prepare_datas(preprocessed_file, data_category):
     outputs = Parallel(n_jobs=12, verbose=10)(delayed(prepare_single_qapair)(qapair, tokenizer) for qapair in data)      
     prepared_datas = [e for e in outputs]
     print("Saving {}_data".format(data_category))
-    with open(data_category+"_data_wa.json", "w") as fh:
+    with open(data_category+"_data.json", "w") as fh:
         json.dump(prepared_datas, fh)
+    
+    
 
-
-
-def train_and_evaluate_rnas_model():
-
+def train_and_evaluate_ras_model():
     batch_size = 3
     num_epochs= 4
     MAX_batch_token_size = 5625
 
     print("Preprocess training data")
-    preprocess_file("hotpot_train_v1.1.json")
+    preprocess_file("hotpot_train_rnas.json")
     print("Prepare training data")
-    prepare_datas("preprocessed_wa_hotpot_train_v1.1.json", "Training")
+    prepare_datas("preprocessed_wa_hotpot_train_rnas.json", "Training")
 
     print("Preprocess dev data")
-    preprocess_file("hotpot_dev_distractor_v1.json")
+    preprocess_file("hotpot_dev_rnas.json")
     print("Prepare dev data")
-    prepare_datas("preprocessed_wa_hotpot_dev_distractor_v1.json", "Dev")
+    prepare_datas("preprocessed_wa_hotpot_dev_rnas.json", "Dev")
 
     print("Loading training datasets..")
     train_dataset = json.load(open("Training_data_wa.json", 'r'))
 
     print("Loading dev datasets..")
-    dev_dataset = json.load(open("Dev_data_wa.json"))
+    dev_dataset = json.load(open("Dev_data_wa.json"))    
 
-    sentence_scorer_wa_model = BertForSequenceClassification.from_pretrained(
+    sentence_scorer_model = BertForSequenceClassification.from_pretrained(
         "bert-base-cased",
         num_labels = 2, 
         output_attentions = False, 
@@ -188,9 +198,9 @@ def train_and_evaluate_rnas_model():
     )
 
 
-    sentence_scorer_wa_model.cuda()
+    sentence_scorer_model.cuda()
 
-    optimizer = optim.Adam(sentence_scorer_wa_model.parameters(), lr=1e-5)
+    optimizer = optim.Adam(sentence_scorer_model.parameters(), lr=1e-5)
     total_training_steps = len(train_dataset) // batch_size if len(train_dataset) % batch_size ==0 else (len(train_dataset) // batch_size)+1
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=total_training_steps//10, num_training_steps= total_training_steps)
 
@@ -208,7 +218,7 @@ def train_and_evaluate_rnas_model():
         print('======== Epoch {:} / {:} ========'.format(epoch + 1, num_epochs))
         print('Training...')
         total_train_loss = 0
-        sentence_scorer_wa_model.train()
+        sentence_scorer_model.train()
         step = 0
         for single_batch in batch(train_dataset, batch_size):
 
@@ -236,14 +246,14 @@ def train_and_evaluate_rnas_model():
                 del attention_masks[drop_sentence_idx]
                 del segment_ids[drop_sentence_idx]
                 del labels[drop_sentence_idx]
-
             b_inputs_ids = torch.Tensor(inputs_ids).cuda().long()
             b_segment_ids = torch.Tensor(segment_ids).cuda().long()
             b_attention_masks = torch.Tensor(attention_masks).cuda().long()
             b_labels = torch.Tensor(labels).cuda().long()
 
-            sentence_scorer_wa_model.zero_grad()
-            loss, logits = sentence_scorer_wa_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
+            sentence_scorer_model.zero_grad()
+            
+            loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)
             total_train_loss += loss.item()
 
             loss.backward()
@@ -264,7 +274,7 @@ def train_and_evaluate_rnas_model():
         # ==============
 
         print("Now validating...")
-        sentence_scorer_wa_model.eval()
+        sentence_scorer_model.eval()
         validation_epoch_start_time = time.time()
 
         total_eval_accuracy = 0
@@ -303,7 +313,7 @@ def train_and_evaluate_rnas_model():
             b_labels = torch.Tensor(labels).cuda().long()
 
             with torch.no_grad():
-                loss, logits = sentence_scorer_wa_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
+                loss, logits = sentence_scorer_model(input_ids = b_inputs_ids, token_type_ids=b_segment_ids, attention_mask=b_attention_masks, labels=b_labels)        
             
             total_eval_loss += loss.item()
 
@@ -333,14 +343,14 @@ def train_and_evaluate_rnas_model():
         )
 
     #Save the training stats
-    print("Saving training stats")
-    with open("Training_stats.json", "w") as fh:
+    print("Saving training stats...")
+    with open("Training_stats_ras.json", "w") as fh:
         json.dump(training_stats, fh)
 
     # Save the fine-tuned model
     print("Saving the fine-tuned model..")
-    sentence_scorer_wa_model.save_pretrained('./')
+    sentence_scorer_model.save_pretrained('./model/ras/')
     print("Training complete!")
 
-
+train_and_evaluate_ras_model()
 
