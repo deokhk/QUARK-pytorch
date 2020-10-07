@@ -169,20 +169,20 @@ def prepare_datas(preprocessed_file, data_category):
     
     
 
-def train_and_evaluate_ras_model():
+def train_and_evaluate_rnas_model():
     batch_size = 3
     num_epochs= 4
     MAX_batch_token_size = 5625
     accumulation_steps = 2
-    print("Preprocess training data")
-    preprocess_file("hotpot_train_rnas.json")
-    print("Prepare training data")
-    prepare_datas("preprocessed_wa_hotpot_train_rnas.json", "Training")
+    # print("Preprocess training data")
+    # preprocess_file("hotpot_train_rnas.json")
+    # print("Prepare training data")
+    # prepare_datas("preprocessed_wa_hotpot_train_rnas.json", "Training")
 
-    print("Preprocess dev data")
-    preprocess_file("hotpot_dev_rnas.json")
-    print("Prepare dev data")
-    prepare_datas("preprocessed_wa_hotpot_dev_rnas.json", "Dev")
+    # print("Preprocess dev data")
+    # preprocess_file("hotpot_dev_rnas.json")
+    # print("Prepare dev data")
+    # prepare_datas("preprocessed_wa_hotpot_dev_rnas.json", "Dev")
 
     print("Loading training datasets..")
     train_dataset = json.load(open("Training_data_wa.json", 'r'))
@@ -352,13 +352,13 @@ def train_and_evaluate_ras_model():
 
     #Save the training stats
     print("Saving training stats...")
-    with open("Training_stats_ras.json", "w") as fh:
+    with open("Training_stats_rnas.json", "w") as fh:
         json.dump(training_stats, fh)
 
     # Save the fine-tuned model
     print("Saving the fine-tuned model..")
-    sentence_scorer_model.save_pretrained('./model/ras/')
+    sentence_scorer_model.save_pretrained('./model/rnas/')
     print("Training complete!")
 
-train_and_evaluate_ras_model()
+train_and_evaluate_rnas_model()
 
